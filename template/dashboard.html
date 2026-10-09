@@ -3,6 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>DNS Admin</title>
     <link rel="icon"
         href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%231565c0'%3E%3Cpath d='M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0M5.78 8.75a9.64 9.64 0 0 0 1.363 4.177c.255.426.542.832.857 1.215.245-.296.551-.705.857-1.215A9.64 9.64 0 0 0 10.22 8.75Zm4.44-1.5a9.64 9.64 0 0 0-1.363-4.177c-.307-.51-.612-.919-.857-1.215a9.927 9.927 0 0 0-.857 1.215A9.64 9.64 0 0 0 5.78 7.25Zm-5.944 1.5H1.543a6.507 6.507 0 0 0 4.666 5.5c-.123-.181-.24-.365-.352-.552-.715-1.192-1.437-2.874-1.581-4.948Zm-2.733-1.5h2.733c.144-2.074.866-3.756 1.58-4.948.12-.197.237-.381.353-.552a6.507 6.507 0 0 0-4.666 5.5Zm10.181 1.5c-.144 2.074-.866 3.756-1.58 4.948-.12.197-.237.381-.353.552a6.507 6.507 0 0 0 4.666-5.5Zm2.733-1.5a6.507 6.507 0 0 0-4.666-5.5c.116.171.234.355.353.552.714 1.192 1.436 2.874 1.58 4.948Z'/%3E%3C/svg%3E">
@@ -64,6 +65,36 @@
             border-radius: .5rem;
             overflow: hidden;
         }
+        body { background: #f8fafc; }
+        .header-layout { display: grid; grid-template-columns: auto minmax(220px, 1fr) auto; gap: 1.5rem; align-items: center; padding: .7rem 1.5rem; }
+        .brand-group { display: flex; align-items: center; gap: .75rem; }
+        .header-search { width: 100%; max-width: 32rem; justify-self: center; }
+        .header-actions { display: flex; gap: 1rem; align-items: center; }
+        .account-info { display: flex; flex-direction: column; align-items: flex-end; gap: .25rem; font-size: .85rem; }
+        .mode-button { background: transparent; border: 0; padding: 0; color: #d1fae5; font-size: .75rem; }
+        .mode-button:hover { color: white; text-decoration: underline; }
+        .mode-button.danger { color: #fff3cd; }
+        .server-tabs { background: white; padding: .75rem 1.5rem 0; gap: .5rem; border-bottom: 1px solid #e2e8f0; }
+        .server-tabs .nav-link { color: #64748b; border: 0; border-bottom: 3px solid transparent; border-radius: .4rem .4rem 0 0; padding: .65rem 1rem; }
+        .server-tabs .nav-link:hover { background: #f1f5f9; color: #334155; }
+        .server-tabs .nav-link.active { background: #eff6ff; color: #1565c0; border-bottom-color: #1565c0; font-weight: 600; }
+        .server-tabs .public-tab.active { background: #fff7ed; color: #c2410c; border-bottom-color: #c2410c; }
+        .table-responsive .table { min-width: 760px; background: white; }
+        .record-create summary { list-style: none; width: fit-content; }
+        .record-create summary::-webkit-details-marker { display: none; }
+        .record-create[open] summary { margin-bottom: 1rem; }
+        .record-create .card { border-color: #e2e8f0; border-radius: .6rem; }
+        @media (max-width: 1199px) {
+            .header-layout { grid-template-columns: 1fr auto; gap: .75rem; }
+            .header-search { grid-column: 1 / -1; grid-row: 2; max-width: none; }
+        }
+        @media (max-width: 640px) {
+            .header-layout { grid-template-columns: 1fr; padding: .75rem 1rem; }
+            .header-actions { flex-wrap: wrap; justify-content: space-between; }
+            .header-search { grid-row: 3; }
+            .account-info { align-items: flex-start; }
+            .server-tabs { padding-left: .5rem; padding-right: .5rem; }
+        }
     </style>
 </head>
 <script>
@@ -102,17 +133,17 @@
 <body>
     <nav class="navbar navbar-dark sticky-top shadow-sm"
         style="background-color: {% if current_server=='external' %}#c2410c{% else %}#1565c0{% endif %};">
-        <div class="container-fluid">
-            <a class="navbar-brand d-flex align-items-center gap-2" href="/" style="font-size: 1.75rem;">
-                <i class="bi bi-hdd-network" aria-hidden="true"></i>DNS Admin
-            </a>
-            <!-- pill fija con el servidor activo -->
-            <span class="badge rounded-pill d-flex align-items-center gap-1 {% if current_server=='external' %}bg-dark{% else %}bg-light text-dark{% endif %}">
-                <i class="bi bi-{% if current_server=='external' %}globe-americas{% else %}hdd-network{% endif %}" aria-hidden="true"></i>
-                {% if current_server=='external' %}DNS público{% else %}DNS privado{% endif %}
-            </span>
-            <form action="{{ url_for('search_records') }}" method="GET" role="search"
-                class="mx-auto my-1" style="width: min(36rem, 100%);">
+        <div class="container-fluid header-layout">
+            <div class="brand-group">
+                <a class="navbar-brand d-flex align-items-center gap-2 m-0" href="/" style="font-size: 1.4rem;">
+                    <i class="bi bi-hdd-network" aria-hidden="true"></i>DNS Admin
+                </a>
+                <span class="badge rounded-pill bg-light text-dark">
+                    <i class="bi bi-{% if current_server=='external' %}globe-americas{% else %}hdd-network{% endif %}" aria-hidden="true"></i>
+                    {% if current_server=='external' %}DNS público{% else %}DNS privado{% endif %}
+                </span>
+            </div>
+            <form action="{{ url_for('search_records') }}" method="GET" role="search" class="header-search">
                 <div class="input-group input-group-sm">
                     <input type="search" name="q" class="form-control"
                         placeholder="Buscar en todas las zonas (* ?)" minlength="2" maxlength="100"
@@ -120,49 +151,47 @@
                     <button class="btn btn-outline-light" type="submit"><i class="bi bi-search" aria-hidden="true"></i> Buscar</button>
                 </div>
             </form>
-            <span class="navbar-text text-white d-flex align-items-center">
+            <div class="header-actions text-white">
                 {% if session.pending_changes %}
-                <a href="{{ url_for('review_changes') }}" class="btn btn-sm btn-warning me-3">
-                    <i class="bi bi-clock-history" aria-hidden="true"></i>
-                    <strong>{{ session.pending_changes|length }}</strong> Cambios Pendientes
+                <a href="{{ url_for('review_changes') }}" class="btn btn-sm btn-outline-light text-nowrap">
+                    <i class="bi bi-clock-history" aria-hidden="true"></i> Revisar cambios
+                    <span class="badge bg-light text-dark ms-1">{{ session.pending_changes|length }}</span>
                 </a>
                 {% endif %}
-                <div class="d-flex flex-column align-items-end me-3">
-                    <span>Usuario: {{ session.user }}</span>
+                <div class="account-info">
+                    <span><i class="bi bi-person" aria-hidden="true"></i> {{ session.user }}</span>
                     {% if session.role == 'admin' %}
-                    <form action="/admin_mode" method="POST" class="d-inline mt-1">
+                    <form action="/admin_mode" method="POST">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         {% if session.admin_mode == 'kamikaze' %}
                         <input type="hidden" name="mode" value="seguro">
-                        <button type="submit" class="btn btn-danger btn-sm py-0" style="font-size: 0.75rem;"
-                            title="El modo kamikaze permite borrar y crear zonas. Haz clic para desactivarlo.">
-                            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Modo Kamikaze Activo</button>
+                        <button type="submit" class="mode-button danger" title="Crear y borrar zonas está habilitado. Activar Modo Seguro.">
+                            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Modo Kamikaze</button>
                         {% else %}
                         <input type="hidden" name="mode" value="kamikaze">
-                        <button type="submit" class="btn btn-success btn-sm py-0" style="font-size: 0.75rem;"
-                            title="El modo seguro oculta la creación y borrado de zonas. Haz clic para activar el Modo Kamikaze.">
-                            <i class="bi bi-shield-lock" aria-hidden="true"></i> Modo Seguro Activo</button>
+                        <button type="submit" class="mode-button" title="Modo Seguro activo. Activar Modo Kamikaze para crear o borrar zonas.">
+                            <i class="bi bi-shield-lock" aria-hidden="true"></i> Modo Seguro</button>
                         {% endif %}
                     </form>
                     {% endif %}
                 </div>
-                <form action="{{ url_for('logout') }}" method="POST" class="d-inline">
+                <form action="{{ url_for('logout') }}" method="POST">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn btn-sm btn-outline-light">
+                    <button type="submit" class="btn btn-sm btn-outline-light text-nowrap">
                         <i class="bi bi-box-arrow-right" aria-hidden="true"></i> Salir</button>
                 </form>
-            </span>
+            </div>
         </div>
     </nav>
     <!-- pestañas para seleccionar servidor -->
-    <ul class="nav nav-tabs">
+    <ul class="nav nav-tabs server-tabs">
         <li class="nav-item">
-            <a class="nav-link {% if current_server=='internal' and search_results is not defined %}active{% endif %}" href="/?server=internal"
-                style="background-color:#e0f7fa;"><i class="bi bi-hdd-network" aria-hidden="true"></i> DNS privado</a>
+            <a class="nav-link {% if current_server=='internal' %}active{% endif %}" href="/?server=internal"
+                ><i class="bi bi-hdd-network" aria-hidden="true"></i> DNS privado</a>
         </li>
         <li class="nav-item">
-            <a class="nav-link {% if current_server=='external' and search_results is not defined %}active{% endif %}" href="/?server=external"
-                style="background-color:#ffe0b2;"><i class="bi bi-globe-americas" aria-hidden="true"></i> DNS público</a>
+            <a class="nav-link public-tab {% if current_server=='external' %}active{% endif %}" href="/?server=external"
+                ><i class="bi bi-globe-americas" aria-hidden="true"></i> DNS público</a>
         </li>
     </ul>
     <div class="container mt-4">
@@ -183,7 +212,7 @@
             <a href="/" class="btn btn-secondary"><i class="bi bi-arrow-left" aria-hidden="true"></i> Volver al listado</a>
         </div>
         {% if search_results %}
-        <table class="table table-striped table-hover align-middle table-card">
+        <div class="table-responsive"><table class="table table-striped table-hover align-middle table-card">
             <thead>
                 <tr>
                     <th style="width: 22%;">Zona</th>
@@ -206,7 +235,7 @@
                 </tr>
                 {% endfor %}
             </tbody>
-        </table>
+        </table></div>
         {% else %}
         <div class="alert alert-info">No se encontraron registros que coincidan con «{{ query }}».</div>
         {% endif %}
@@ -235,7 +264,7 @@
         </div>
         {% endif %}
         <br>
-        <table class="table table-striped table-hover table-card">
+        <div class="table-responsive"><table class="table table-striped table-hover table-card">
             <thead>
                 <tr>
                     <th>Dominio</th>
@@ -304,7 +333,7 @@
                 </tr>
                 {% endfor %}
             </tbody>
-        </table>
+        </table></div>
 
         <!-- VISTA: DETALLE DE ZONA (REGISTROS) -->
         {% else %}
@@ -314,9 +343,9 @@
         </div>
 
         {% if session.role == 'admin' %}
-        <div class="card mb-4">
-            <div class="card-header">Añadir Registro (nuevo RRset / REPLACE)</div>
-            <div class="card-body">
+        <details class="record-create mb-4">
+            <summary class="btn btn-primary"><i class="bi bi-plus-circle" aria-hidden="true"></i> Añadir registro</summary>
+            <div class="card card-body">
                 <!-- Este form sigue creando/reemplazando un RRset con un solo valor.
                          Para múltiples valores, usá el "Modificar" en la tabla. -->
                 <form action="/record/add" method="POST">
@@ -355,8 +384,8 @@
                     </div>
                 </form>
             </div>
-        </div>
-        {% endif %}                        <table class="table table-bordered align-middle" style="table-layout: fixed; width: 100%;">
+        </details>
+        {% endif %}                        <div class="table-responsive"><table class="table table-bordered align-middle" style="table-layout: fixed; width: 100%;">
             <thead>
                 <tr>
                     <th style="width: 25%;">Nombre</th>
@@ -411,7 +440,7 @@
                             <input type="hidden" name="zone" value="{{ zone_detail.name }}">
                             <input type="hidden" name="name" value="{{ rrset.name }}">
                             <input type="hidden" name="type" value="{{ rrset.type }}">
-                            <button type="submit" class="btn btn-danger btn-sm">
+                            <button type="submit" class="btn btn-outline-danger btn-sm">
                                 <i class="bi bi-trash" aria-hidden="true"></i> Borrar</button>
                         </form>
                         {% endif %}
@@ -480,7 +509,7 @@
                 </tr>
                 {% endfor %}
             </tbody>
-        </table>
+        </table></div>
         {% endif %}
     </div>
 

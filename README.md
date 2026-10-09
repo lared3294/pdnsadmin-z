@@ -307,9 +307,9 @@ Las consultas de búsqueda tienen entre 2 y 100 caracteres y muestran hasta `sea
 
 ### Crear, modificar o borrar registros
 
-1. Como administrador, abre una zona. Para añadir un registro, introduce el nombre relativo (`www`) o `@` para la raíz de la zona, tipo, contenido y TTL en segundos.
+1. Como administrador, abre una zona y pulsa **Añadir registro** para desplegar el formulario. Introduce el nombre relativo (`www`) o `@` para la raíz de la zona, tipo, contenido y TTL en segundos.
 2. Pulsa **Guardar**, o **Modificar** sobre un RRset existente. Para varios valores del mismo nombre y tipo, usa **Modificar** y edita la lista completa.
-3. Abre **Cambios Pendientes** para revisar el servidor, zona, nombre, tipo, TTL y contenido.
+3. Abre **Revisar cambios** en la cabecera para revisar el servidor, zona, nombre, tipo, TTL y contenido.
 4. Quita un cambio individual, usa **Descartar Todo**, o pulsa **Confirmar y Aplicar** para enviarlos a PowerDNS.
 
 Ejemplo: en `example.org.`, el nombre `www`, tipo `A`, contenido `192.0.2.20` y TTL `300` prepara un cambio para `www.example.org.`. Para MX, el contenido tiene prioridad y destino, por ejemplo `10 mail.example.org.`.
