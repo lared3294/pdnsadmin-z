@@ -150,7 +150,7 @@ sudo ./install.sh --no-packages
 
 En reinstalaciones, el INI existente **se conserva byte por byte**; no se regenera la clave de sesión ni se añaden opciones automáticamente. Sus permisos se ajustan al usuario del instalador. El código, las dependencias y el archivo de servicio se actualizan; cualquier personalización de ese archivo queda en una copia `.bak.FECHA.PID`. Reaplica después tus cambios o usa un override de systemd. Una habilitación previa de systemd se conserva, aunque el instalador no ejecuta el arranque.
 
-Detén `pdnsadmin` y el antiguo `dnsadmin`, si corresponde, antes de actualizar. El instalador rechaza reemplazar una instancia activa que detecta. Si migras desde una instalación manual con `www-data`, revisa que el nuevo usuario `pdnsadmin` pueda leer los certificados y escribir el directorio de sesiones que conserva tu INI.
+Detén `pdnsadmin` antes de actualizar. El instalador rechaza reemplazar una instancia activa que detecta.
 
 ## Instalación manual
 
@@ -226,7 +226,7 @@ Mantén la clave entre reinicios y compártela entre los workers. El directorio 
 
 En Keycloak, prepara un cliente OpenID Connect con **Standard Flow** y autenticación del cliente habilitados. Registra la URI de retorno de la aplicación y configura un mapper de pertenencia a grupos para que estos estén presentes en los datos de usuario recibidos por la aplicación. La configuración del proveedor se describe en la [guía de administración de Keycloak](https://www.keycloak.org/docs/latest/server_admin/index.html).
 
-Ejemplo para una aplicación publicada en `https://dnsadmin.example.org`:
+Ejemplo para una aplicación publicada en `https://pdnsadmin.example.org`:
 
 ```ini
 [oidc]
@@ -238,11 +238,11 @@ admin_role = AdminDNSUsers
 user_role = DNSUsers
 groups_claim = Grupos
 verify_ssl = True
-redirect_uri = https://dnsadmin.example.org/callback
+redirect_uri = https://pdnsadmin.example.org/callback
 ```
 
-- **Valid redirect URI:** `https://dnsadmin.example.org/callback`.
-- **Valid post logout redirect URI:** `https://dnsadmin.example.org/login`.
+- **Valid redirect URI:** `https://pdnsadmin.example.org/callback`.
+- **Valid post logout redirect URI:** `https://pdnsadmin.example.org/login`.
 - **Grupo `AdminDNSUsers`:** acceso de administración.
 - **Grupo `DNSUsers`:** acceso de consulta.
 - **Claim `Grupos`:** lista de grupos del usuario; puedes cambiar `groups_claim` si tu proveedor usa otro nombre. El código también acepta el claim `groups` como alternativa.
@@ -266,10 +266,10 @@ Con Gunicorn escuchando en `127.0.0.1:5000`, este bloque ilustra el proxy invers
 ```nginx
 server {
     listen 443 ssl;
-    server_name dnsadmin.example.org;
+    server_name pdnsadmin.example.org;
 
-    ssl_certificate /etc/letsencrypt/live/dnsadmin.example.org/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/dnsadmin.example.org/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/pdnsadmin.example.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/pdnsadmin.example.org/privkey.pem;
 
     location / {
         proxy_pass http://127.0.0.1:5000;
@@ -297,7 +297,7 @@ certfile = /etc/pdnsadmin/certs/fullchain.pem
 keyfile = /etc/pdnsadmin/certs/privkey.pem
 ```
 
-Configura también `session_secure = True` y una URI OIDC que coincida con la dirección pública, por ejemplo `https://dnsadmin.example.org:8443/callback`. Usa `trust_proxy = False` si el navegador conecta directamente a Gunicorn.
+Configura también `session_secure = True` y una URI OIDC que coincida con la dirección pública, por ejemplo `https://pdnsadmin.example.org:8443/callback`. Usa `trust_proxy = False` si el navegador conecta directamente a Gunicorn.
 
 Las rutas relativas de certificados se resuelven desde la carpeta del **archivo INI**, no desde el directorio de trabajo. El certificado puede incluir la cadena intermedia; la clave debe estar sin contraseña y ambos archivos deben ser legibles por el usuario del servicio. Al arrancar se comprueba que se puedan cargar y que el certificado corresponda a la clave. Si falla la validación, el proceso se detiene con un error; no pasa a HTTP silenciosamente. Esta comprobación no sustituye verificar vigencia, nombre de dominio y confianza de la cadena.
 
@@ -388,23 +388,6 @@ sudo service pdnsadmin reload
 sudo service pdnsadmin restart
 sudo /etc/init.d/pdnsadmin tail
 ```
-
-### Migrar desde el servicio dnsadmin
-
-Antes de habilitar `pdnsadmin`, detén y deshabilita el servicio anterior para evitar dos instancias escuchando en el mismo puerto. En systemd:
-
-```sh
-sudo systemctl disable --now dnsadmin
-```
-
-En SysV init de Devuan/antiX:
-
-```sh
-sudo service dnsadmin stop
-sudo update-rc.d dnsadmin disable
-```
-
-Copia las rutas de certificados y la dirección de escucha de tu antiguo script al nuevo INI. Cambia también rutas de automatizaciones o comandos que todavía invoquen el servicio anterior.
 
 `/run` es temporal: las sesiones allí se pierden al reiniciar el equipo o detener el servicio systemd. Aplica o descarta los cambios pendientes antes de esas operaciones. Si necesitas conservarlas, configura un directorio persistente y crea sus permisos para el usuario del servicio.
 
