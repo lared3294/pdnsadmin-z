@@ -1,0 +1,87 @@
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <div><h3 class="mb-1">Filtros de navegación</h3><p class="text-muted mb-0">Política de bloqueo para los cuatro servidores recursivos privados.</p></div>
+    <span class="badge bg-light text-dark border">PowerDNS Recursor · RPZ</span>
+</div>
+{% if filter_config_error %}
+<div class="alert alert-warning"><i class="bi bi-tools" aria-hidden="true"></i> {{ filter_config_error }} La edición y el guardado de listas siguen disponibles.</div>
+{% endif %}
+<form method="POST" action="{{ url_for('filters') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="card card-body mb-4 border-0 shadow-sm">
+        <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="steven-enabled" name="steven_enabled" {% if filter_state.steven_enabled %}checked{% endif %} {% if session.role != 'admin' %}disabled{% endif %}>
+            <label class="form-check-label fw-bold" for="steven-enabled">StevenBlacklist</label>
+        </div>
+        <div class="text-muted small mt-2">Incluir la lista de StevenBlack con juegos de azar y pornografía. Se descarga de nuevo al aplicar.</div>
+    </div>
+    <div class="row g-4 mb-4">
+        <div class="col-lg-6"><div class="card h-100 shadow-sm">
+            <div class="card-header bg-white py-3"><i class="bi bi-shield-x text-danger" aria-hidden="true"></i> <strong>Lista negra</strong><div class="small text-muted mt-1">Dominios adicionales que quieres bloquear.</div></div>
+            <div class="card-body"><label class="visually-hidden" for="blacklist">Lista negra en formato hosts</label>
+                <textarea class="form-control font-monospace" style="font-size:.85rem;" id="blacklist" name="blacklist" rows="12" maxlength="1048576" placeholder="# Redes sociales&#10;0.0.0.0 facebook.com&#10;0.0.0.0 instagram.com" {% if session.role != 'admin' %}readonly{% endif %}>{{ filter_state.blacklist }}</textarea>
+            </div>
+        </div></div>
+        <div class="col-lg-6"><div class="card h-100 shadow-sm">
+            <div class="card-header bg-white py-3"><i class="bi bi-shield-check text-success" aria-hidden="true"></i> <strong>Lista blanca</strong><div class="small text-muted mt-1">Excepciones: tienen prioridad sobre ambas fuentes de bloqueo.</div></div>
+            <div class="card-body"><label class="visually-hidden" for="whitelist">Lista blanca en formato hosts</label>
+                <textarea class="form-control font-monospace" style="font-size:.85rem;" id="whitelist" name="whitelist" rows="12" maxlength="1048576" placeholder="0.0.0.0 azurefd.net&#10;0.0.0.0 googletagmanager.com" {% if session.role != 'admin' %}readonly{% endif %}>{{ filter_state.whitelist }}</textarea>
+            </div>
+        </div></div>
+    </div>
+    <div class="alert alert-light border small mb-4">Formato: <code>0.0.0.0 dominio.com</code> o un dominio por línea. Se admiten comentarios con <code>#</code>. Las reglas coinciden con el <strong>nombre exacto</strong>; los subdominios deben añadirse explícitamente.</div>
+    {% if session.role == 'admin' %}
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4">
+        <span class="text-muted small">Guardar conserva la edición. Aplicar genera la política y reinicia los recursivos.</span>
+        <div class="d-flex gap-2">
+            <button class="btn btn-outline-primary filter-submit" name="action" value="save" {% if filter_job and filter_job.status == 'running' %}disabled{% endif %}><i class="bi bi-save" aria-hidden="true"></i> Guardar listas</button>
+            <button class="btn btn-primary filter-submit" name="action" value="apply" {% if filter_config_error or (filter_job and filter_job.status == 'running') %}disabled{% endif %}
+                onclick="return confirm('Se aplicará la política generada a los cuatro recursivos y se reiniciarán sus servicios. ¿Continuar?');"><i class="bi bi-check2-circle" aria-hidden="true"></i> Aplicar filtros</button>
+        </div>
+    </div>
+    {% endif %}
+</form>
+{% if filter_targets %}
+<div class="mb-4 small text-muted">Destinos: {% for target in filter_targets %}<span class="badge bg-white text-dark border me-1">{{ target.name }} · {{ target.host }}</span>{% endfor %}</div>
+{% endif %}
+{% if filter_job %}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-white"><strong>Última aplicación</strong> <span class="text-muted small">· {{ filter_job.user }}</span></div>
+    <div class="card-body">
+        <p id="filter-job-message" role="status" aria-live="polite">{{ filter_job.message }}</p>
+        <div id="filter-job-stats" class="small text-muted mb-3">{% if filter_job.stats %}Dominios finales: {{ filter_job.stats.total }} · Excluidos por lista blanca: {{ filter_job.stats.excluded }}{% endif %}</div>
+        <div id="filter-job-results">{% for result in filter_job.results %}<div class="mb-2"><strong>{{ result.name }}</strong> · {{ {"ready": "Comprobado", "applying": "Aplicando…", "success": "Aplicado", "error": "Error"}.get(result.status, result.status) }}<div class="small text-muted">{{ result.detail }}</div></div>{% endfor %}</div>
+    </div>
+</div>
+{% if session.role == 'admin' and filter_job.status == 'running' %}
+<script>
+(function () {
+    const statusUrl = {{ url_for('filters_status', job_id=filter_job.id)|tojson }};
+    async function poll() {
+        try {
+            const response = await fetch(statusUrl, {headers: {'Accept': 'application/json'}});
+            if (!response.ok) throw new Error('status');
+            const job = await response.json();
+            document.getElementById('filter-job-message').textContent = job.message;
+            if (job.stats) document.getElementById('filter-job-stats').textContent = `Dominios finales: ${job.stats.total} · Excluidos por lista blanca: ${job.stats.excluded}`;
+            const results = document.getElementById('filter-job-results');
+            results.replaceChildren();
+            const labels = {ready: 'Comprobado', applying: 'Aplicando…', success: 'Aplicado', error: 'Error'};
+            for (const result of job.results) {
+                const row = document.createElement('div'); row.className = 'mb-2';
+                const title = document.createElement('strong'); title.textContent = result.name;
+                const badge = document.createElement('span'); badge.className = 'badge ms-2 ' + (result.status === 'error' ? 'bg-danger' : result.status === 'success' ? 'bg-success' : 'bg-secondary'); badge.textContent = labels[result.status] || result.status;
+                const detail = document.createElement('div'); detail.className = 'small text-muted'; detail.textContent = result.detail;
+                row.append(title, badge, detail); results.append(row);
+            }
+            if (job.status === 'running') window.setTimeout(poll, 2000);
+            else window.location.reload();
+        } catch (_) {
+            document.getElementById('filter-job-message').textContent = 'No se pudo consultar el estado. Recarga para comprobar el resultado.';
+            window.setTimeout(poll, 5000);
+        }
+    }
+    window.setTimeout(poll, 1500);
+})();
+</script>
+{% endif %}
+{% endif %}

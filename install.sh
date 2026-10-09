@@ -58,7 +58,7 @@ parse_args() {
 source_complete() {
     [[ -n "$SOURCE_DIR" ]] || return 1
     local name
-    for name in pdnsadmin-z.py wsgi.py gunicorn.conf.py requirements.txt config.example.ini README.md install.sh init/pdnsadmin systemd/pdnsadmin.service; do
+    for name in pdnsadmin-z.py dns_filters.py wsgi.py gunicorn.conf.py requirements.txt config.example.ini README.md install.sh init/pdnsadmin systemd/pdnsadmin.service template/filters.html scripts/pdnsadmin-rpz; do
         [[ -f "$SOURCE_DIR/$name" ]] || return 1
     done
 }
@@ -108,17 +108,17 @@ install_packages() {
     case "$PACKAGE_MANAGER" in
         apt)
             run apt-get update
-            run apt-get install -y python3 python3-venv python3-pip ca-certificates util-linux passwd
+            run apt-get install -y python3 python3-venv python3-pip ca-certificates util-linux passwd openssh-client
             if [[ "$SELECTED_INIT" == sysv ]]; then run apt-get install -y dpkg init-system-helpers; fi
             ;;
-        dnf|yum) run "$PACKAGE_MANAGER" install -y python3 python3-pip ca-certificates util-linux shadow-utils ;;
-        zypper) run zypper --non-interactive install python3 python3-pip ca-certificates util-linux shadow ;;
+        dnf|yum) run "$PACKAGE_MANAGER" install -y python3 python3-pip ca-certificates util-linux shadow-utils openssh-clients ;;
+        zypper) run zypper --non-interactive install python3 python3-pip ca-certificates util-linux shadow openssh ;;
     esac
 }
 
 check_dependencies() {
     local cmd
-    for cmd in python3 install getent useradd groupadd runuser; do
+    for cmd in python3 install getent useradd groupadd runuser ssh; do
         command -v "$cmd" >/dev/null || fail "Falta $cmd. Instala las dependencias del sistema.";
     done
     python3 -c 'import venv, ensurepip' || fail 'Python requiere venv y ensurepip (en Debian/Ubuntu: python3-venv).'
@@ -164,14 +164,14 @@ create_account() {
 
 copy_application() {
     local name
-    run install -d -o root -g root -m 0755 "$APP_DIR" "$APP_DIR/template" "$APP_DIR/init" "$APP_DIR/systemd"
+    run install -d -o root -g root -m 0755 "$APP_DIR" "$APP_DIR/template" "$APP_DIR/init" "$APP_DIR/systemd" "$APP_DIR/scripts"
     # Explicit list: never copy config.ini, certificates, ZIPs, .git or local environments.
-    for name in pdnsadmin-z.py wsgi.py gunicorn.conf.py requirements.txt config.example.ini README.md; do
+    for name in pdnsadmin-z.py dns_filters.py wsgi.py gunicorn.conf.py requirements.txt config.example.ini README.md; do
         if [[ "$SOURCE_DIR/$name" != "$APP_DIR/$name" ]]; then
             run install -o root -g root -m 0644 "$SOURCE_DIR/$name" "$APP_DIR/$name"
         fi
     done
-    for name in dashboard.html login.html review.html; do
+    for name in dashboard.html filters.html login.html review.html; do
         if [[ "$SOURCE_DIR/template/$name" != "$APP_DIR/template/$name" ]]; then
             run install -o root -g root -m 0644 "$SOURCE_DIR/template/$name" "$APP_DIR/template/$name"
         fi
@@ -180,6 +180,9 @@ copy_application() {
         run install -o root -g root -m 0755 "$SOURCE_DIR/init/pdnsadmin" "$APP_DIR/init/pdnsadmin"
         run install -o root -g root -m 0644 "$SOURCE_DIR/systemd/pdnsadmin.service" "$APP_DIR/systemd/pdnsadmin.service"
         run install -o root -g root -m 0755 "$SOURCE_DIR/install.sh" "$APP_DIR/install.sh"
+    fi
+    if [[ "$SOURCE_DIR" != "$APP_DIR" ]]; then
+        run install -o root -g root -m 0755 "$SOURCE_DIR/scripts/pdnsadmin-rpz" "$APP_DIR/scripts/pdnsadmin-rpz"
     fi
     run python3 -m venv "$APP_DIR/.venv"
     run "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
@@ -190,7 +193,7 @@ copy_application() {
 prepare_config() {
     umask 077
     run install -d -o root -g "$SERVICE_USER" -m 0750 "$CONFIG_DIR" "$CONFIG_DIR/certs"
-    run install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$STATE_DIR" "$STATE_DIR/sessions"
+    run install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$STATE_DIR" "$STATE_DIR/sessions" "$STATE_DIR/filters" "$STATE_DIR/.ssh"
     if [[ -e "$CONFIG_DIR/config.ini" || -L "$CONFIG_DIR/config.ini" ]]; then
         [[ ! -L "$CONFIG_DIR/config.ini" && -f "$CONFIG_DIR/config.ini" ]] || fail 'config.ini debe ser un archivo normal, no un enlace.'
         printf 'Se conserva la configuración existente: %s/config.ini\n' "$CONFIG_DIR"

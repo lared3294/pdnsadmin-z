@@ -4,7 +4,7 @@ import ipaddress
 import time
 import logging
 from logging.handlers import SysLogHandler
-from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from functools import wraps
 from datetime import timedelta
 import requests
@@ -18,6 +18,7 @@ from flask.sessions import SessionInterface, SessionMixin
 from cachelib.file import FileSystemCache
 from collections import UserDict
 import uuid
+from dns_filters import FilterError, FilterStore, read_targets
 
 # --- configuración desde archivo/env -------------------------------------
 # para evitar tocar el script se lee un fichero INI (por defecto `config.ini`)
@@ -112,6 +113,7 @@ MIN_SEARCH_LENGTH = 2
 MAX_SEARCH_LENGTH = 100
 
 app = Flask(__name__, template_folder='template')
+app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024
 # clave de sesión: valor explícito en config.ini ([flask] secret_key) o
 # env FLASK_SECRET_KEY, o se genera uno aleatorio cada arranque.
 #app.secret_key = cfg_get('flask', 'secret_key', 'FLASK_SECRET_KEY', '') or os.urandom(24)
@@ -1179,6 +1181,59 @@ def commit_changes():
 
     return redirect(url_for('index'))
 
+
+
+# Recursive filter policies are independent from the authoritative PowerDNS API.
+filter_store = FilterStore(cfg_get('filters', 'state_dir', 'PDNSADMIN_FILTERS_DIR', '/tmp/pdnsadmin-filters'))
+
+
+@app.route('/filters', methods=['GET', 'POST'])
+@login_required
+def filters():
+    set_pdns_server('internal')
+    targets, config_error, state, job = [], '', None, None
+    try:
+        targets = read_targets(cfg)
+    except FilterError as error:
+        config_error = str(error)
+    try:
+        state = filter_store.read()
+        if request.method == 'POST':
+            if session.get('role') != 'admin':
+                flash('Acceso solo para administradores', 'danger')
+                return redirect(url_for('filters'))
+            state = {'steven_enabled': request.form.get('steven_enabled') == 'on',
+                     'blacklist': request.form.get('blacklist', ''),
+                     'whitelist': request.form.get('whitelist', '')}
+            action = request.form.get('action', 'save')
+            if action == 'apply':
+                if config_error:
+                    raise FilterError(config_error)
+                job_id = filter_store.start(state, targets, session['user'])
+                log_event(session['user'], 'filters_apply_started', details=f'job={job_id}')
+                flash('Generación y distribución iniciadas. El resultado se muestra debajo.', 'info')
+                return redirect(url_for('filters'))
+            if action != 'save':
+                raise FilterError('Acción inválida.')
+            filter_store.save(state)
+            log_event(session['user'], 'filters_lists_saved')
+            flash('Listas guardadas. Todavía no se aplicaron a los recursivos.', 'success')
+            return redirect(url_for('filters'))
+        job = filter_store.latest_job()
+    except (FilterError, OSError, ValueError) as error:
+        flash(f'Filtros: {error}', 'danger')
+    return render_template('dashboard.html', filter_view=True, current_server='internal',
+                           filter_state=state or {'steven_enabled': False, 'blacklist': '', 'whitelist': ''},
+                           filter_targets=targets, filter_config_error=config_error, filter_job=job)
+
+
+@app.route('/filters/status/<job_id>')
+@admin_required
+def filters_status(job_id):
+    try:
+        return jsonify(filter_store.job(job_id))
+    except (FilterError, OSError, ValueError):
+        return jsonify(error='La operación no está disponible.'), 404
 
 
 # --- INICIO DE LA APLICACIÓN CON HTTPS ---

@@ -6,6 +6,19 @@ Los cambios de registros se guardan en una lista de pendientes: puedes revisarlo
 
 **Sin bases de datos intermedias:** pdnsadmin-z consulta y modifica directamente los servidores PowerDNS a través de su API HTTP. No mantiene una base de datos propia de zonas o registros. Los cambios de registros pendientes se conservan temporalmente en la sesión del usuario y se envían a PowerDNS al confirmarlos; la creación y eliminación de zonas se ejecutan directamente al realizar la operación.
 
+## Filtros de recursivos privados
+
+En **DNS privado**, las subpestañas **Zonas / Dominios** y **Filtros** separan la administración autoritativa de las políticas de los recursivos. Filtros permite seleccionar StevenBlacklist (variante gambling-porn), editar listas negra y blanca y distribuir la política resultante a cuatro PowerDNS Recursor por SSH, con reinicio y resultados individuales.
+
+Consulta la [guía de configuración y despliegue de filtros](docs/recursive-filters.md) para preparar los recursivos y sus permisos. La lista blanca tiene prioridad y utiliza nombres exactos. Esta funcionalidad se desarrolla en la rama `feature/recursive-dns-filters`.
+
+Para instalar esta rama directamente, descarga su instalador y selecciona la misma referencia:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lared3294/pdnsadmin-z/feature/recursive-dns-filters/install.sh -o /tmp/pdnsadmin-install.sh
+sudo bash /tmp/pdnsadmin-install.sh --ref feature/recursive-dns-filters
+```
+
 ## Capturas de pantalla
 
 Las capturas se generaron a partir de las plantillas reales del proyecto con un usuario, dominios y direcciones ficticios.
@@ -17,6 +30,10 @@ Las capturas se generaron a partir de las plantillas reales del proyecto con un 
 **Revisión de cambios**, antes de confirmar su aplicación:
 
 ![Lista de cambios pendientes de aplicar a PowerDNS](docs/images/revision.png)
+
+**Filtros de recursivos**, con selección de StevenBlacklist y listas editables:
+
+![Pestaña de filtros con listas negra y blanca](docs/images/filtros.png)
 
 ## Funcionalidades
 

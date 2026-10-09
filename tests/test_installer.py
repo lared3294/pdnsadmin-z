@@ -112,7 +112,7 @@ detect_init'''
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             archive = root / 'project.tar.gz'
-            required = ['pdnsadmin-z.py', 'wsgi.py', 'gunicorn.conf.py', 'requirements.txt',
+            required = ['pdnsadmin-z.py', 'dns_filters.py', 'scripts/pdnsadmin-rpz', 'template/filters.html', 'wsgi.py', 'gunicorn.conf.py', 'requirements.txt',
                         'config.example.ini', 'README.md', 'install.sh', 'init/pdnsadmin',
                         'systemd/pdnsadmin.service', 'template/dashboard.html',
                         'template/login.html', 'template/review.html']
