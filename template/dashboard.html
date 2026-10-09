@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <title>DNS Admin</title>
+    <link rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%231565c0'%3E%3Cpath d='M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0M5.78 8.75a9.64 9.64 0 0 0 1.363 4.177c.255.426.542.832.857 1.215.245-.296.551-.705.857-1.215A9.64 9.64 0 0 0 10.22 8.75Zm4.44-1.5a9.64 9.64 0 0 0-1.363-4.177c-.307-.51-.612-.919-.857-1.215a9.927 9.927 0 0 0-.857 1.215A9.64 9.64 0 0 0 5.78 7.25Zm-5.944 1.5H1.543a6.507 6.507 0 0 0 4.666 5.5c-.123-.181-.24-.365-.352-.552-.715-1.192-1.437-2.874-1.581-4.948Zm-2.733-1.5h2.733c.144-2.074.866-3.756 1.58-4.948.12-.197.237-.381.353-.552a6.507 6.507 0 0 0-4.666 5.5Zm10.181 1.5c-.144 2.074-.866 3.756-1.58 4.948-.12.197-.237.381-.353.552a6.507 6.507 0 0 0 4.666-5.5Zm2.733-1.5a6.507 6.507 0 0 0-4.666-5.5c.116.171.234.355.353.552.714 1.192 1.436 2.874 1.58 4.948Z'/%3E%3C/svg%3E">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-1BmE4kWBq78iYhFldvKuhfTAU6auU8tT94WrHftjDbrCEXSU1oBoqyl2QvZ6jIW3" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+        integrity="sha256-9kPW/n5nn53j4WMRYAxe9c1rCY96Oogo/MKSVdKzPmI=" crossorigin="anonymous">
+    <style>
+        /* badges de color por tipo de registro */
+        .badge-type-A,
+        .badge-type-AAAA {
+            background-color: #198754;
+        }
+
+        .badge-type-CNAME {
+            background-color: #0d6efd;
+        }
+
+        .badge-type-TXT {
+            background-color: #ffc107;
+            color: #212529;
+        }
+
+        .badge-type-MX {
+            background-color: #6f42c1;
+        }
+
+        .badge-type-NS {
+            background-color: #20c997;
+            color: #212529;
+        }
+
+        .badge-type-PTR {
+            background-color: #fd7e14;
+        }
+
+        .badge-type-SRV {
+            background-color: #0dcaf0;
+            color: #212529;
+        }
+
+        .badge-type-CAA {
+            background-color: #d63384;
+        }
+
+        .badge-type-SOA {
+            background-color: #6c757d;
+        }
+
+        /* encabezados de tabla con fondo suave */
+        .table thead th {
+            background-color: #f1f5f9;
+            border-bottom: 2px solid #cbd5e1;
+        }
+
+        /* tabla de zonas con esquinas redondeadas */
+        .table-card {
+            border: 1px solid #dee2e6;
+            border-radius: .5rem;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<script>
+    function checkZoneName(realName, index) {
+        const input = document.getElementById("confirm-input-" + index);
+        const button = document.getElementById("confirm-btn-" + index);
+        const hidden = document.getElementById("hidden-confirm-" + index);
+
+        let typed = (input.value || "").trim();
+
+        // normalize by removing trailing dot for comparison
+        const normalize = s => s.endsWith('.') ? s.slice(0, -1) : s;
+        const normReal = normalize(realName);
+        const normTyped = normalize(typed);
+
+        if (normTyped === normReal) {
+            button.disabled = false;
+            hidden.value = typed;   // se envía al backend (keep user input)
+        } else {
+            button.disabled = true;
+            hidden.value = "";
+        }
+    }
+
+    function initZoneChecks() {
+        document.querySelectorAll('input[data-zonename]').forEach((input, idx) => {
+            input.addEventListener('keyup', () => {
+                checkZoneName(input.dataset.zonename, idx + 1);
+            });
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', initZoneChecks);
+</script>
+
+<body>
+    <nav class="navbar navbar-dark sticky-top shadow-sm"
+        style="background-color: {% if current_server=='external' %}#ff7043{% else %}#1565c0{% endif %};">
+        <div class="container-fluid">
+            <a class="navbar-brand d-flex align-items-center gap-2" href="/" style="font-size: 1.75rem;">
+                <i class="bi bi-hdd-network" aria-hidden="true"></i>DNS Admin {% if current_server=='external' %}(Internet){% else
+                %}(Interno){% endif %}            </a>
+            <!-- pill fija con el servidor activo -->
+            <span class="badge rounded-pill d-flex align-items-center gap-1 {% if current_server=='external' %}bg-dark{% else %}bg-light text-dark{% endif %}">
+                <i class="bi bi-{% if current_server=='external' %}globe-americas{% else %}hdd-network{% endif %}" aria-hidden="true"></i>
+                {% if current_server=='external' %}Internet{% else %}Interno{% endif %}
+            </span>
+            <form action="{{ url_for('search_records') }}" method="GET" role="search"
+                class="mx-auto my-1" style="width: min(36rem, 100%);">
+                <div class="input-group input-group-sm">
+                    <input type="search" name="q" class="form-control"
+                        placeholder="Buscar en todas las zonas (* ?)" minlength="2" maxlength="100"
+                        value="{{ request.args.get('q', '') }}" aria-label="Buscar registros">
+                    <button class="btn btn-outline-light" type="submit"><i class="bi bi-search" aria-hidden="true"></i> Buscar</button>
+                </div>
+            </form>
+            <span class="navbar-text text-white d-flex align-items-center">
+                {% if session.pending_changes %}
+                <a href="{{ url_for('review_changes') }}" class="btn btn-sm btn-warning me-3">
+                    <i class="bi bi-clock-history" aria-hidden="true"></i>
+                    <strong>{{ session.pending_changes|length }}</strong> Cambios Pendientes
+                </a>
+                {% endif %}
+                <div class="d-flex flex-column align-items-end me-3">
+                    <span>Usuario: {{ session.user }}</span>
+                    {% if session.role == 'admin' %}
+                    <form action="/admin_mode" method="POST" class="d-inline mt-1">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        {% if session.admin_mode == 'kamikaze' %}
+                        <input type="hidden" name="mode" value="seguro">
+                        <button type="submit" class="btn btn-danger btn-sm py-0" style="font-size: 0.75rem;"
+                            title="El modo kamikaze permite borrar y crear zonas. Haz clic para desactivarlo.">
+                            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Modo Kamikaze Activo</button>
+                        {% else %}
+                        <input type="hidden" name="mode" value="kamikaze">
+                        <button type="submit" class="btn btn-success btn-sm py-0" style="font-size: 0.75rem;"
+                            title="El modo seguro oculta la creación y borrado de zonas. Haz clic para activar el Modo Kamikaze.">
+                            <i class="bi bi-shield-lock" aria-hidden="true"></i> Modo Seguro Activo</button>
+                        {% endif %}
+                    </form>
+                    {% endif %}
+                </div>
+                <form action="{{ url_for('logout') }}" method="POST" class="d-inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-sm btn-outline-light">
+                        <i class="bi bi-box-arrow-right" aria-hidden="true"></i> Salir</button>
+                </form>
+            </span>
+        </div>
+    </nav>
+    <!-- pestañas para seleccionar servidor -->
+    <ul class="nav nav-tabs">
+        <li class="nav-item">
+            <a class="nav-link {% if current_server=='internal' and search_results is not defined %}active{% endif %}" href="/?server=internal"
+                style="background-color:#e0f7fa;"><i class="bi bi-hdd-network" aria-hidden="true"></i> Interno</a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link {% if current_server=='external' and search_results is not defined %}active{% endif %}" href="/?server=external"
+                style="background-color:#ffe0b2;"><i class="bi bi-globe-americas" aria-hidden="true"></i> Internet</a>
+        </li>
+    </ul>
+    <div class="container mt-4">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+        {% endif %}
+        {% endwith %}
+
+        <!-- VISTA: RESULTADOS DE BÚSQUEDA GLOBAL -->
+        {% if search_results is defined %}
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h3 class="mb-0"><i class="bi bi-search" aria-hidden="true"></i> Resultados para «{{ query }}»
+                <span class="badge bg-secondary">{{ search_results|length }}</span>
+            </h3>
+            <a href="/" class="btn btn-secondary"><i class="bi bi-arrow-left" aria-hidden="true"></i> Volver al listado</a>
+        </div>
+        {% if search_results %}
+        <table class="table table-striped table-hover align-middle table-card">
+            <thead>
+                <tr>
+                    <th style="width: 22%;">Zona</th>
+                    <th style="width: 22%;">Nombre</th>
+                    <th style="width: 8%;">Tipo</th>
+                    <th style="width: 8%;">TTL</th>
+                    <th>Contenido</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for res in search_results %}
+                <tr>
+                    <td class="text-break"><a href="/zone/{{ res.zone_id }}">{{ res.zone }}</a></td>
+                    <td class="text-break">{{ res.name }}</td>
+                    <td><span class="badge badge-type-{{ res.type }}">{{ res.type }}</span></td>
+                    <td>{{ res.ttl }}</td>
+                    <td class="text-break">{{ res.content }}
+                        {% if res.disabled %}<span class="badge bg-secondary">deshabilitado</span>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="alert alert-info">No se encontraron registros que coincidan con «{{ query }}».</div>
+        {% endif %}
+
+        <!-- VISTA: LISTADO DE ZONAS -->
+        {% elif not zone_detail %}
+        {% if session.role == 'admin' and session.get('admin_mode') == 'kamikaze' %}
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">Añadir Nueva Zona</div>
+                    <div class="card-body">
+                        <form action="/zone/add" method="POST">
+                            <!-- CSRF token -->
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <div class="input-group">
+                                <input type="text" name="name" class="form-control" placeholder="ejemplo.com"
+                                    maxlength="255" required>
+                                <button class="btn btn-success" type="submit">
+                                    <i class="bi bi-file-earmark-code" aria-hidden="true"></i> Crear Zona</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+        <br>
+        <table class="table table-striped table-hover table-card">
+            <thead>
+                <tr>
+                    <th>Dominio</th>
+                    <th>Tipo</th>
+                    <th>Serial</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for zone in zones %}
+                <tr>
+                    <td><a href="/zone/{{ zone.id }}"><i class="bi bi-folder2-open text-secondary me-1" aria-hidden="true"></i>{{ zone.name }}</a></td>
+                    <td><span class="badge rounded-pill bg-light text-dark border">{{ zone.kind }}</span></td>
+                    <td>{{ zone.serial }}</td>
+                    <td>
+                        {% if session.role == 'admin' and session.get('admin_mode') == 'kamikaze' %}
+                        <button type="button" class="btn btn-danger btn-sm" data-bs-toggle="modal"
+                            data-bs-target="#deleteZoneModal-{{ loop.index }}">
+                            Borrar
+                        </button>
+
+                        <!-- Modal de confirmación fuerte -->
+                        <div class="modal fade" id="deleteZoneModal-{{ loop.index }}" tabindex="-1">
+                            <div class="modal-dialog">
+                                <div class="modal-content">
+
+                                    <div class="modal-header">
+                                        <h5 class="modal-title text-danger">Eliminar zona</h5>
+                                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                    </div>
+
+                                    <div class="modal-body">
+                                        <p>Estás a punto de eliminar la zona:</p>
+                                        <h5 class="text-danger">{{ zone.name }}</h5>
+
+                                        <p class="mt-3">
+                                            Para confirmar, escribí el nombre completo de la zona:
+                                        </p>
+
+                                        <input type="text" class="form-control" id="confirm-input-{{ loop.index }}"
+                                            placeholder="{{ zone.name }}" data-zonename="{{ zone.name|e }}">
+                                    </div>
+
+                                    <div class="modal-footer">
+                                        <button class="btn btn-secondary" data-bs-dismiss="modal">
+                                            Cancelar
+                                        </button>
+
+                                        <form action="/zone/delete/{{ zone.id }}" method="POST">
+                                            <!-- CSRF token -->
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <input type="hidden" name="confirm_name"
+                                                id="hidden-confirm-{{ loop.index }}">
+                                            <button type="submit" id="confirm-btn-{{ loop.index }}"
+                                                class="btn btn-danger" disabled>
+                                                <i class="bi bi-trash" aria-hidden="true"></i> Eliminar definitivamente
+                                            </button>
+                                        </form>
+                                    </div>
+
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <!-- VISTA: DETALLE DE ZONA (REGISTROS) -->
+        {% else %}
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h3>Zona: {{ zone_detail.name }}</h3>
+            <a href="/" class="btn btn-secondary"><i class="bi bi-arrow-left" aria-hidden="true"></i> Volver al listado</a>
+        </div>
+
+        {% if session.role == 'admin' %}
+        <div class="card mb-4">
+            <div class="card-header">Añadir Registro (nuevo RRset / REPLACE)</div>
+            <div class="card-body">
+                <!-- Este form sigue creando/reemplazando un RRset con un solo valor.
+                         Para múltiples valores, usá el "Modificar" en la tabla. -->
+                <form action="/record/add" method="POST">
+                    <!-- CSRF token -->
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="zone" value="{{ zone_detail.name }}">
+                    <input type="hidden" name="default_ttl" value="{{ default_ttl }}">
+                    <div class="row g-2">
+                        <div class="col-md-3">
+                            <input type="text" name="name" class="form-control" placeholder="Nombre (ej: www o @)"
+                                maxlength="255" required>
+                        </div>
+                        <div class="col-md-2">
+                            <select name="type" class="form-select">
+                                <option>A</option>
+                                <option>CNAME</option>
+                                <option>MX</option>
+                                <option>TXT</option>
+                                <option>NS</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <input type="text" name="content" class="form-control" placeholder="Valor (ej: 192.168.1.1)"
+                                maxlength="1024" required>
+                        </div>
+                        <div class="col-md-1">
+                            <input type="text" name="ttl" class="form-control" value="{{ default_ttl }}" maxlength="10">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="submit" class="btn btn-primary w-100"><i class="bi bi-plus-circle" aria-hidden="true"></i> Guardar</button>
+                        </div>
+                    </div>
+                    <div class="form-text mt-2">
+                        Tip: si un nombre necesita múltiples valores (varios A/TXT/etc.), creá uno y luego usá
+                        “Modificar”.
+                    </div>
+                </form>
+            </div>
+        </div>
+        {% endif %}                        <table class="table table-bordered align-middle" style="table-layout: fixed; width: 100%;">
+            <thead>
+                <tr>
+                    <th style="width: 25%;">Nombre</th>
+                    <th style="width: 10%;">Tipo</th>
+                    <th style="width: 10%;">TTL</th>
+                    <th>Datos</th>
+                    <th style="width: 240px;">Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for rrset in zone_detail['rrsets'] %}
+                {% set is_pending = (rrset.name, rrset.type) in pending_keys %}
+                <tr {% if is_pending %}style="background-color: #fff3cd;" {% endif %}>
+                    <td>
+                        {{ rrset.name }}
+                        {% if is_pending %}
+                        <span class="badge bg-warning text-dark ms-1" style="font-size: 0.7em;">PENDIENTE</span>
+                        {% endif %}
+                    </td>
+                    <td><span class="badge badge-type-{{ rrset.type }}">{{ rrset.type }}</span></td>
+                    <td>{{ rrset.ttl }}</td>
+                    <td class="text-break">
+                        <ul class="list-unstyled mb-0">
+                            {% for record in rrset.records %}
+                            <li>{{ record.content }}</li>
+                            {% endfor %}
+                        </ul>
+                    </td>
+                    <td class="text-nowrap">
+                        {% if session.role == 'admin' %}
+                        {% set soa_locked = (rrset.type == 'SOA' and session.get('admin_mode') != 'kamikaze') %}
+
+                        <!-- MODIFICAR (edita lista completa de records del rrset) -->
+                        {% if not soa_locked %}
+                        <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="collapse"
+                            data-bs-target="#edit-{{ loop.index }}" aria-expanded="false"
+                            aria-controls="edit-{{ loop.index }}">
+                            <i class="bi bi-pencil" aria-hidden="true"></i> Modificar
+                        </button>
+                        {% else %}
+                        <span class="badge bg-secondary">SOA: requiere Kamikaze</span>
+                        {% endif %}
+
+                        {% if rrset.type != 'SOA' %}
+
+                        <!-- BORRAR RRSET COMPLETO -->
+                        <form action="/record/delete" method="POST"
+                            onsubmit='return confirm("¿Borrar " + {{ rrset.type | tojson }} + " " + {{ rrset.name | tojson }} + " completo?");'
+                            class="d-inline">
+                            <!-- CSRF token -->
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="zone" value="{{ zone_detail.name }}">
+                            <input type="hidden" name="name" value="{{ rrset.name }}">
+                            <input type="hidden" name="type" value="{{ rrset.type }}">
+                            <button type="submit" class="btn btn-danger btn-sm">
+                                <i class="bi bi-trash" aria-hidden="true"></i> Borrar</button>
+                        </form>
+                        {% endif %}
+
+                        <!-- EDITOR COLAPSABLE -->
+                        {% if not soa_locked %}
+                        <div class="collapse mt-2" id="edit-{{ loop.index }}">
+                            <div class="card card-body">
+                                <form action="/record/add" method="POST">
+                                    <!-- CSRF token -->
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <input type="hidden" name="zone" value="{{ zone_detail.name }}">
+                                    <!-- Mandamos el FQDN tal cual viene -->
+                                    <input type="hidden" name="name" value="{{ rrset.name }}">
+                                    <input type="hidden" name="type" value="{{ rrset.type }}">
+                                    <input type="hidden" name="default_ttl" value="{{ default_ttl }}">
+
+                                    <div class="mb-2">
+                                        <label class="form-label mb-1">TTL</label>
+                                        <input type="text" name="ttl" class="form-control form-control-sm"
+                                            value="{{ rrset.ttl }}" maxlength="10">
+                                    </div>
+
+                                    <label class="form-label mb-1">Valores ({{ rrset.type }})</label>
+
+                                    <!-- Contenedor de inputs dinámicos -->
+                                    <div id="values-{{ loop.index }}">
+                                        {% for record in rrset.records %}
+                                        <div class="input-group input-group-sm mb-2 record-row">
+                                            <input type="text" name="content[]" class="form-control"
+                                                value="{{ record.content }}" maxlength="1024" required>
+                                            <button class="btn btn-outline-danger" type="button"
+                                                onclick="removeRecordRow(this)">✕</button>
+                                        </div>
+                                        {% endfor %}
+
+                                        {% if not rrset.records or rrset.records|length == 0 %}
+                                        <div class="input-group input-group-sm mb-2 record-row">
+                                            <input type="text" name="content[]" class="form-control" value=""
+                                                maxlength="1024" required>
+                                            <button class="btn btn-outline-danger" type="button"
+                                                onclick="removeRecordRow(this)">✕</button>
+                                        </div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="d-flex gap-2">
+                                        <button class="btn btn-outline-secondary btn-sm" type="button"
+                                            onclick="addRecordRow('values-{{ loop.index }}')">
+                                            <i class="bi bi-plus-lg" aria-hidden="true"></i> Agregar valor
+                                        </button>
+                                        <button class="btn btn-primary btn-sm" type="submit">
+                                            <i class="bi bi-check2-circle" aria-hidden="true"></i> Guardar cambios
+                                        </button>
+                                    </div>
+
+                                    <div class="form-text mt-2">
+                                        Guardar hace <b>REPLACE</b>: el RRset queda exactamente con estos valores.
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                        {% endif %}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </div>
+
+    <!-- Bootstrap JS (necesario para collapse) -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p"
+        crossorigin="anonymous"></script>
+
+    <script>
+        function addRecordRow(containerId) {
+            const container = document.getElementById(containerId);
+            const div = document.createElement('div');
+            div.className = 'input-group input-group-sm mb-2 record-row';
+            div.innerHTML = `
+                <input type="text" name="content[]" class="form-control" value="" maxlength="1024" required>
+                <button class="btn btn-outline-danger" type="button" onclick="removeRecordRow(this)">✕</button>
+            `;
+            container.appendChild(div);
+        }
+
+        function removeRecordRow(btn) {
+            const row = btn.closest('.record-row');
+            const container = row.parentElement;
+            row.remove();
+
+            // Evitar que quede 0 filas (para no mandar un REPLACE vacío por accidente)
+            const remaining = container.querySelectorAll('.record-row');
+            if (remaining.length === 0) {
+                const div = document.createElement('div');
+                div.className = 'input-group input-group-sm mb-2 record-row';
+                div.innerHTML = `
+                    <input type="text" name="content[]" class="form-control" value="" maxlength="1024" required>
+                    <button class="btn btn-outline-danger" type="button" onclick="removeRecordRow(this)">✕</button>
+                `;
+                container.appendChild(div);
+            }
+        }
+
+        // desplazar el panel expandido hacia la parte superior de la ventana
+        document.addEventListener('DOMContentLoaded', function () {
+            document.querySelectorAll('.collapse').forEach(function (col) {
+                col.addEventListener('shown.bs.collapse', function () {
+                    // desplazar suavemente al inicio del colapse
+                    col.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                });
+            });
+        });
+    </script>
+</body>
+
+</html>
