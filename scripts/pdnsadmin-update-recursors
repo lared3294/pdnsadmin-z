@@ -1,0 +1,27 @@
+#!/bin/sh
+# SSH aliases and credentials belong to the system account running this script.
+set -eu
+
+[ "$#" -eq 2 ] || { echo 'Uso: pdnsadmin-update-recursors recursor1|recursor2|recursor3|recursor4 hosts|forward-zones' >&2; exit 1; }
+case "$1" in
+    recursor1|recursor2|recursor3|recursor4) target=$1 ;;
+    *) echo 'Destino desconocido' >&2; exit 1 ;;
+esac
+
+case "$2" in
+    hosts|forward-zones) file=$2 ;;
+    *) echo 'Archivo desconocido' >&2; exit 1 ;;
+esac
+
+umask 077
+hosts=$(mktemp)
+trap 'rm -f "$hosts"' EXIT HUP INT TERM
+cat > "$hosts"
+
+scp -q -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 \
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+    "$hosts" "$target:/etc/powerdns/$file"
+ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 \
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=2 "$target" \
+    'if [ -d /run/systemd/system ]; then systemctl restart pdns-recursor; else service pdns-recursor restart; fi'
+printf '%s: %s copiado y servicio reiniciado.\n' "$target" "$file"

@@ -18,7 +18,7 @@ from flask.sessions import SessionInterface, SessionMixin
 from cachelib.file import FileSystemCache
 from collections import UserDict
 import uuid
-from dns_filters import FilterError, FilterStore, read_targets
+from recursor_config import FilterError, FilterStore, read_targets
 
 # --- configuración desde archivo/env -------------------------------------
 # para evitar tocar el script se lee un fichero INI (por defecto `config.ini`)
@@ -1204,12 +1204,13 @@ def filters():
                 return redirect(url_for('filters'))
             state = {'steven_enabled': request.form.get('steven_enabled') == 'on',
                      'blacklist': request.form.get('blacklist', ''),
-                     'whitelist': request.form.get('whitelist', '')}
+                     'whitelist': request.form.get('whitelist', ''),
+                     'forwarders': request.form.get('forwarders', '')}
             action = request.form.get('action', 'save')
-            if action == 'apply':
+            if action in ('apply', 'apply_forwarders'):
                 if config_error:
                     raise FilterError(config_error)
-                job_id = filter_store.start(state, targets, session['user'])
+                job_id = filter_store.start(state, targets, session['user'], 'forward-zones' if action == 'apply_forwarders' else 'hosts')
                 log_event(session['user'], 'filters_apply_started', details=f'job={job_id}')
                 flash('Generación y distribución iniciadas. El resultado se muestra debajo.', 'info')
                 return redirect(url_for('filters'))

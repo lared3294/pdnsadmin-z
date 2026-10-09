@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from dns_filters import FilterStore
+from recursor_config import FilterStore
 
 
 class FilterRouteTests(unittest.TestCase):
@@ -42,7 +42,7 @@ class FilterRouteTests(unittest.TestCase):
         with patch.object(self.module.requests, 'get', side_effect=AssertionError('must not contact PDNS')):
             response = self.client.get('/filters')
         self.assertEqual(response.status_code, 200)
-        self.assertIn('Filtros de navegación', response.get_data(as_text=True))
+        self.assertIn('Configuración de recursivos', response.get_data(as_text=True))
         with self.client.session_transaction() as state: self.assertEqual(state['pdns_server'], 'internal')
 
     def test_consultation_user_cannot_save(self):
@@ -70,6 +70,21 @@ class FilterRouteTests(unittest.TestCase):
             response = self.client.post('/filters', data=dict(csrf_token='test-token', action='apply', blacklist='example.com'))
             start.assert_not_called()
         self.assertEqual(response.status_code, 200)
+
+    def test_forwarder_apply_selects_forward_zones(self):
+        self.login()
+        self.module.cfg.read_string('[filters]\ntargets=recursor1,recursor2,recursor3,recursor4\n')
+        for i in range(1, 5): self.module.cfg[f'recursor:recursor{i}'] = {'host': f'192.0.2.{i}'}
+        with patch.object(self.module.filter_store, 'start', return_value='a'*32) as start:
+            response = self.client.post('/filters', data=dict(csrf_token='test-token', action='apply_forwarders', forwarders='example.org=192.0.2.1'))
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(start.call_args.args[-1], 'forward-zones')
+
+    def test_invalid_forwarder_cannot_be_saved(self):
+        self.login()
+        response = self.client.post('/filters', data=dict(csrf_token='test-token', action='save', forwarders='example.org=192.0.2.1;reboot'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.module.filter_store.read()['forwarders'], '')
 
     def test_unknown_job_returns_404(self):
         self.login()

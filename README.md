@@ -4,19 +4,19 @@ Interfaz web en español para administrar zonas y registros de **PowerDNS Author
 
 Los cambios de registros se guardan en una lista de pendientes: puedes revisarlos, descartarlos o confirmarlos antes de enviarlos a PowerDNS.
 
-**Sin bases de datos intermedias:** pdnsadmin-z consulta y modifica directamente los servidores PowerDNS a través de su API HTTP. No mantiene una base de datos propia de zonas o registros. Los cambios de registros pendientes se conservan temporalmente en la sesión del usuario y se envían a PowerDNS al confirmarlos; la creación y eliminación de zonas se ejecutan directamente al realizar la operación.
+**Sin bases de datos intermedias:** pdnsadmin-z consulta y modifica directamente los servidores PowerDNS a través de su API HTTP. No mantiene una base de datos propia de zonas o registros. Las listas de filtros de recursivos se guardan en archivos locales y se distribuyen como hosts mediante un script del sistema. Los cambios de registros pendientes se conservan temporalmente en la sesión del usuario y se envían a PowerDNS al confirmarlos; la creación y eliminación de zonas se ejecutan directamente al realizar la operación.
 
-## Filtros de recursivos privados
+## Configuración de recursivos privados
 
-En **DNS privado**, las subpestañas **Zonas / Dominios** y **Filtros** separan la administración autoritativa de las políticas de los recursivos. Filtros permite seleccionar StevenBlacklist (variante gambling-porn), editar listas negra y blanca y distribuir la política resultante a cuatro PowerDNS Recursor por SSH, con reinicio y resultados individuales.
+En **DNS privado**, las subpestañas **Dominios** y **Configuración de recursivos** separan la administración autoritativa de las políticas de los recursivos. Filtros permite seleccionar StevenBlacklist (variante gambling-porn), editar listas negra y blanca y generar un archivo hosts y distribuirlo a cuatro PowerDNS Recursor mediante un script del sistema que copia por SCP y reinicia los servicios. También permite editar y aplicar `/etc/powerdns/forward-zones`, con un botón independiente. La aplicación no maneja credenciales SSH y muestra resultados individuales.
 
-Consulta la [guía de configuración y despliegue de filtros](docs/recursive-filters.md) para preparar los recursivos y sus permisos. La lista blanca tiene prioridad y utiliza nombres exactos. Esta funcionalidad se desarrolla en la rama `feature/recursive-dns-filters`.
+Consulta la [guía de configuración y despliegue de filtros](docs/recursive-filters.md) para preparar los recursivos y sus permisos. La lista blanca tiene prioridad y utiliza nombres exactos. Esta funcionalidad se desarrolla en la rama `recursor_control`.
 
 Para instalar esta rama directamente, descarga su instalador y selecciona la misma referencia:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lared3294/pdnsadmin-z/feature/recursive-dns-filters/install.sh -o /tmp/pdnsadmin-install.sh
-sudo bash /tmp/pdnsadmin-install.sh --ref feature/recursive-dns-filters
+curl -fsSL https://raw.githubusercontent.com/lared3294/pdnsadmin-z/recursor_control/install.sh -o /tmp/pdnsadmin-install.sh
+sudo bash /tmp/pdnsadmin-install.sh --ref recursor_control
 ```
 
 ## Capturas de pantalla
@@ -31,7 +31,7 @@ Las capturas se generaron a partir de las plantillas reales del proyecto con un 
 
 ![Lista de cambios pendientes de aplicar a PowerDNS](docs/images/revision.png)
 
-**Filtros de recursivos**, con selección de StevenBlacklist y listas editables:
+**Configuración de recursivos**, con listas de bloqueo y forwarders editables:
 
 ![Pestaña de filtros con listas negra y blanca](docs/images/filtros.png)
 

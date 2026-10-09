@@ -1,32 +1,52 @@
-# Filtros para PowerDNS Recursor
+# Configuración de recursivos
 
-La pestaña **DNS privado** tiene dos subpestañas: **Zonas / Dominios** conserva la administración autoritativa y **Filtros** administra una política independiente para cuatro PowerDNS Recursor.
-
-## Listas y aplicación
-
-Se admiten entradas `0.0.0.0 dominio.com`, un dominio por línea y comentarios `#`. Los nombres se normalizan a minúsculas y se eliminan duplicados. Se aceptan las etiquetas DNS con `_` de los ejemplos de analítica.
-
-El selector **StevenBlacklist** usa la [variante gambling-porn de StevenBlack](https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/gambling-porn/hosts). Al aplicar, la política se calcula así:
+La pestaña **Configuración de recursivos** permite editar filtros y forwarders. El formulario valida los dominios y genera un archivo hosts con:
 
 ```text
 (StevenBlack, si está seleccionado ∪ lista negra) − lista blanca
 ```
 
-La comparación es de **nombre exacto**: permitir `example.org` no permite automáticamente `www.example.org`. Del mismo modo, bloquear un dominio no crea una regla comodín para sus subdominios. Añade explícitamente los nombres que necesites.
+Se admiten `0.0.0.0 dominio.com`, un dominio por línea y comentarios `#`. La lista blanca tiene prioridad por nombre exacto; los subdominios deben añadirse explícitamente. StevenBlacklist usa la variante gambling-porn.
 
-**Guardar listas** solo conserva la edición. **Aplicar filtros** guarda las listas, descarga Steven si corresponde, genera una lista `hosts` y una política RPZ de respuesta **NXDOMAIN**, comprueba los cuatro destinos y luego aplica y reinicia cada recursivo de forma secuencial. La ejecución continúa en segundo plano y el panel muestra el resultado individual.
+**Guardar listas** conserva la edición. **Aplicar filtros** genera el archivo y llama a un único script local para cada recursivo. El script hace dos cosas: copiar `/etc/powerdns/hosts` por SCP y reiniciar `pdns-recursor` por SSH. La aplicación muestra éxito o error para cada servidor y continúa con los otros destinos si uno falla.
 
-Si Steven no se puede descargar o falla una comprobación previa, no se envían políticas. Los errores posteriores se muestran por servidor: no hay una transacción global entre los cuatro. Si el reinicio de un recursivo falla, su helper restaura la política anterior e intenta recuperar el servicio. Un timeout SSH deja un resultado incierto que debe revisarse en ese servidor.
+## Instalación del script
 
-Con Steven desmarcado y una lista negra vacía, aplicar genera una política sin bloqueos. El contenido de la lista blanca no crea registros DNS ni cambia las respuestas de otros filtros que ya existan en Recursor.
+En el servidor de la aplicación:
 
-Solo los administradores pueden guardar, aplicar y consultar el seguimiento de operaciones. Los usuarios de consulta pueden ver las listas.
+```sh
+sudo install -o root -g root -m 0755 scripts/pdnsadmin-update-recursors /usr/local/sbin/pdnsadmin-update-recursors
+```
 
-## Configurar el servidor de la aplicación
+Configura los alias `recursor1`, `recursor2`, `recursor3` y `recursor4` en `/root/.ssh/config`. Las claves y `known_hosts` quedan administradas por el sistema, fuera de la aplicación. Ejemplo para un destino; repite para los otros tres:
 
-El instalador de esta rama instala el cliente SSH y prepara `/var/lib/pdnsadmin/filters` y `/var/lib/pdnsadmin/.ssh` para el usuario `pdnsadmin`. En una instalación manual, crea esos directorios con permisos de escritura para el usuario del servicio.
+```sshconfig
+Host recursor1
+    HostName 192.0.2.11
+    User root
+    IdentityFile /root/.ssh/id_ed25519
+    IdentitiesOnly yes
+```
 
-Completa las nuevas secciones de `config.example.ini` en tu INI existente; una reinstalación conserva el INI y no añade automáticamente opciones.
+La cuenta SSH debe poder sobrescribir `/etc/powerdns/hosts` y reiniciar el servicio. El ejemplo usa root; si utilizas otra cuenta, ajusta sus permisos y el comando de reinicio del script. Comprueba las claves de host y añade cada equipo al `known_hosts` de root.
+
+Autoriza únicamente los ocho comandos mediante `sudo visudo -f /etc/sudoers.d/pdnsadmin-filters`:
+
+```sudoers
+pdnsadmin ALL=(root) NOPASSWD: /usr/local/sbin/pdnsadmin-update-recursors recursor1 hosts, /usr/local/sbin/pdnsadmin-update-recursors recursor1 forward-zones, /usr/local/sbin/pdnsadmin-update-recursors recursor2 hosts, /usr/local/sbin/pdnsadmin-update-recursors recursor2 forward-zones, /usr/local/sbin/pdnsadmin-update-recursors recursor3 hosts, /usr/local/sbin/pdnsadmin-update-recursors recursor3 forward-zones, /usr/local/sbin/pdnsadmin-update-recursors recursor4 hosts, /usr/local/sbin/pdnsadmin-update-recursors recursor4 forward-zones
+```
+
+No hace falta instalar scripts ni archivos de configuración adicionales en los recursivos. Mantén:
+
+```ini
+etc-hosts-file=/etc/powerdns/hosts
+export-etc-hosts=on
+forward-zones-file=/etc/powerdns/forward-zones
+```
+
+El script detecta systemd o SysV init en el destino para reiniciar. Si tu servicio tiene otro nombre, cambia `pdns-recursor` en el script del sistema.
+
+## Configuración del panel
 
 ```ini
 [filters]
@@ -35,114 +55,40 @@ targets = recursor1, recursor2, recursor3, recursor4
 
 [recursor:recursor1]
 host = 192.0.2.11
-user = pdnsadmin-deploy
-port = 22
-identity_file = /var/lib/pdnsadmin/.ssh/id_ed25519
-known_hosts_file = /var/lib/pdnsadmin/.ssh/known_hosts
+
+[recursor:recursor2]
+host = 192.0.2.12
+
+[recursor:recursor3]
+host = 192.0.2.13
+
+[recursor:recursor4]
+host = 192.0.2.14
 ```
 
-Repite la sección de destino para los otros tres servidores con direcciones distintas. Son destinos recursivos: no se utilizan las URLs ni las claves de `[pdns]`.
+Los hosts del INI identifican los equipos en pantalla; los destinos efectivos son los alias SSH del sistema y deben corresponderse. No se usan credenciales del INI ni de la API autoritativa.
 
-Genera una clave dedicada en el servidor de la aplicación:
+El instalador incluye el script, SSH/SCP y sudo, pero los alias y el permiso sudo se configuran una vez a mano. Una reinstalación conserva tu INI.
 
-```sh
-sudo runuser -u pdnsadmin -- ssh-keygen -t ed25519 -N '' -f /var/lib/pdnsadmin/.ssh/id_ed25519
-```
+El archivo hosts se reemplaza completo, incluso si la lista queda vacía. No hay comprobaciones previas, copias de respaldo ni restauración automática. Si falla SCP no se reinicia ese servidor; si falla el reinicio, el archivo nuevo queda copiado y el panel informa del error. Un timeout requiere comprobar el estado del servidor.
 
-Instala la clave **pública** en la cuenta SSH elegida de cada recursivo. Añade sus claves de host verificadas a `known_hosts` y deja ambos archivos legibles por `pdnsadmin`. El cliente usa `BatchMode`, identidades explícitas y comprobación estricta del host: no acepta hosts desconocidos automáticamente ni solicita contraseñas desde la web.
+Las listas e historial se guardan en archivos privados en `state_dir`, sin base de datos. Solo los administradores pueden guardar o aplicar filtros.
 
-## Preparar cada recursivo una vez
+## Forwarders
 
-Este desarrollo utiliza RPZ cargada desde un archivo Lua y un helper limitado a actualizar esa política. La [documentación de RPZ de PowerDNS](https://doc.powerdns.com/recursor/lua-config/rpz.html) describe `rpzFile` y las acciones de política.
-
-1. Instala Python 3, SSH y sudo en el recursivo si no están disponibles.
-2. Crea la cuenta SSH de despliegue, por ejemplo `pdnsadmin-deploy`, con shell para ejecutar comandos remotos e instala la clave pública dedicada.
-3. Copia `scripts/pdnsadmin-rpz` desde esta rama y déjalo en `/usr/local/sbin/pdnsadmin-rpz`, propietario `root:root`, modo `0755`. La cuenta de despliegue no debe poder modificar el helper ni su configuración.
-4. Configura la política y su activación en Recursor como se indica debajo.
-
-Ejemplo de instalación del helper, una vez copiado al recursivo:
-
-```sh
-sudo install -o root -g root -m 0755 pdnsadmin-rpz /usr/local/sbin/pdnsadmin-rpz
-sudoedit /etc/pdnsadmin-rpz.json
-```
-
-Contenido de `/etc/pdnsadmin-rpz.json`:
-
-```json
-{
-  "policy_file": "/etc/powerdns/pdnsadmin.rpz",
-  "lua_file": "/etc/powerdns/recursor.lua",
-  "service": "pdns-recursor",
-  "init_system": "auto",
-  "control_args": []
-}
-```
-
-Adapta rutas y nombre de servicio a cada máquina. `init_system` acepta `auto`, `systemd` o `sysv`. `control_args` permite seleccionar el socket o directorio de configuración de esa instancia al ejecutar `rec_control`, por ejemplo `['--config-dir=/etc/powerdns']` (en JSON usa comillas dobles).
-
-```sh
-sudo chown root:root /etc/pdnsadmin-rpz.json
-sudo chmod 0644 /etc/pdnsadmin-rpz.json
-```
-
-Crea la política inicial **vacía**, sin sustituir un archivo ya existente:
+Pega el contenido de tu archivo actual en **Forwarders** y guarda. El panel conserva esa edición localmente; no lee automáticamente el archivo de los recursivos.
 
 ```text
-$ORIGIN pdnsadmin.rpz.
-$TTL 60
-@ IN SOA localhost. hostmaster.localhost. 1 60 60 604800 60
-@ IN NS localhost.
+# Destinos autoritativos
+example.org=192.0.2.10,192.0.2.11:5300
+# Destino recursivo
++example.net=192.0.2.20
+# IPv6 con puerto
+ipv6.example=[2001:db8::10]:5353
 ```
 
-Guárdala en la ruta configurada, con permisos para que el usuario de PowerDNS pueda leerla. Añade esta declaración al Lua de configuración existente, conservando las demás instrucciones:
+La aplicación comprueba zonas, IP y puertos, y rechaza zonas duplicadas. Admite comentarios, IPv4/IPv6, varias IP separadas por coma o punto y coma y los prefijos `+` y `^`. Genera una zona por línea. `+` pide recursión al destino; `^` permite NOTIFY en versiones compatibles. Consulta la [sintaxis de PowerDNS](https://doc.powerdns.com/recursor/settings.html#forward-zones-file).
 
-```lua
-rpzFile("/etc/powerdns/pdnsadmin.rpz")
-```
+**Aplicar forwarders** copia exclusivamente `/etc/powerdns/forward-zones` y reinicia. **Aplicar filtros** copia exclusivamente `/etc/powerdns/hosts` y reinicia. El script recibe dos argumentos fijos: el alias del destino y `hosts` o `forward-zones`. Cada botón guarda todo el formulario pero aplica solamente su sección.
 
-Si no se utiliza todavía un Lua de configuración, actívalo en `recursor.conf`:
-
-```ini
-lua-config-file=/etc/powerdns/recursor.lua
-```
-
-O en una configuración YAML que todavía no defina las opciones equivalentes directamente en YAML:
-
-```yaml
-recursor:
-  lua_config_file: /etc/powerdns/recursor.lua
-```
-
-Conserva las claves existentes del bloque `recursor`. No mezcles opciones RPZ nativas de YAML con su equivalente Lua; PowerDNS exige elegir una modalidad para esas opciones. Consulta la [configuración YAML de Recursor](https://doc.powerdns.com/recursor/yamlsettings.html) para tu versión. Si ya tienes RPZ nativas de YAML, adapta la integración antes de utilizar este helper.
-
-Reinicia Recursor para cargar esta preparación inicial. El helper comprueba tanto la declaración `rpzFile` como el parámetro del Lua activo mediante `rec_control get-parameter` antes de cambiar la política; un servicio activo por sí solo no basta.
-
-## Permisos para aplicar desde la aplicación
-
-Con `sudo visudo -f /etc/sudoers.d/pdnsadmin-rpz`, permite únicamente los dos comandos del helper a la cuenta SSH elegida:
-
-```sudoers
-pdnsadmin-deploy ALL=(root) NOPASSWD: /usr/local/sbin/pdnsadmin-rpz --check, /usr/local/sbin/pdnsadmin-rpz --apply
-```
-
-Puedes restringir también la clave en `authorized_keys` con la opción `restrict` y una restricción de origen apropiada para tu red. No concedas sudo general a esa cuenta.
-
-Comprueba desde el servidor de la aplicación, con las mismas opciones SSH del INI:
-
-```sh
-sudo runuser -u pdnsadmin -- ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes \
-  -o IdentitiesOnly=yes -o UserKnownHostsFile=/var/lib/pdnsadmin/.ssh/known_hosts \
-  -i /var/lib/pdnsadmin/.ssh/id_ed25519 pdnsadmin-deploy@192.0.2.11 \
-  sudo -n /usr/local/sbin/pdnsadmin-rpz --check
-```
-
-Repite esa comprobación para los cuatro destinos antes de pulsar **Aplicar filtros**.
-
-## Archivos y seguimiento
-
-Las listas se guardan en `lists.json` dentro de `state_dir`. Cada aplicación conserva un identificador, su política `.rpz`, su lista `.hosts`, conteos y resultados individuales en `jobs/`. Se almacenan con permisos privados y no hay una base de datos intermedia. Los accesos y aplicaciones se registran con el logger `pdnsadmin`.
-
-Solo se permite una aplicación simultánea. Si se reinicia el proceso de la aplicación durante un trabajo, el panel lo marca como interrumpido; revisa los cuatro recursivos antes de reintentar. El helper mantiene una copia `.previous` junto a la política en cada servidor.
-
-Los archivos históricos no se purgan automáticamente en esta primera versión. Planifica la retención de `jobs/` según el uso.
+Una lista de forwarders vacía reemplaza el archivo con uno vacío y elimina sus reenvíos. Las reglas de bloqueo permanecen independientes: la lista blanca de filtros no modifica los forwarders.

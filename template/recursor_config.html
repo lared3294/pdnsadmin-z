@@ -1,6 +1,6 @@
 <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-    <div><h3 class="mb-1">Filtros de navegación</h3><p class="text-muted mb-0">Política de bloqueo para los cuatro servidores recursivos privados.</p></div>
-    <span class="badge bg-light text-dark border">PowerDNS Recursor · RPZ</span>
+    <div><h3 class="mb-1">Configuración de recursivos</h3><p class="text-muted mb-0">Listas de bloqueo y reenvío de zonas para los cuatro recursivos privados.</p></div>
+    <span class="badge bg-light text-dark border">PowerDNS Recursor</span>
 </div>
 {% if filter_config_error %}
 <div class="alert alert-warning"><i class="bi bi-tools" aria-hidden="true"></i> {{ filter_config_error }} La edición y el guardado de listas siguen disponibles.</div>
@@ -12,7 +12,7 @@
             <input class="form-check-input" type="checkbox" id="steven-enabled" name="steven_enabled" {% if filter_state.steven_enabled %}checked{% endif %} {% if session.role != 'admin' %}disabled{% endif %}>
             <label class="form-check-label fw-bold" for="steven-enabled">StevenBlacklist</label>
         </div>
-        <div class="text-muted small mt-2">Incluir la lista de StevenBlack con juegos de azar y pornografía. Se descarga de nuevo al aplicar.</div>
+        <div class="text-muted small mt-2">Incluir la lista de StevenBlack de malware, anuncios y contenido no deseado. Se descarga de nuevo al aplicar.</div>
     </div>
     <div class="row g-4 mb-4">
         <div class="col-lg-6"><div class="card h-100 shadow-sm">
@@ -31,14 +31,31 @@
     <div class="alert alert-light border small mb-4">Formato: <code>0.0.0.0 dominio.com</code> o un dominio por línea. Se admiten comentarios con <code>#</code>. Las reglas coinciden con el <strong>nombre exacto</strong>; los subdominios deben añadirse explícitamente.</div>
     {% if session.role == 'admin' %}
     <div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4">
-        <span class="text-muted small">Guardar conserva la edición. Aplicar genera la política y reinicia los recursivos.</span>
+        <span class="text-muted small">Guardar conserva la edición. Aplicar genera el archivo hosts y reinicia los recursivos.</span>
         <div class="d-flex gap-2">
-            <button class="btn btn-outline-primary filter-submit" name="action" value="save" {% if filter_job and filter_job.status == 'running' %}disabled{% endif %}><i class="bi bi-save" aria-hidden="true"></i> Guardar listas</button>
+            <button class="btn btn-outline-primary filter-submit" name="action" value="save" {% if filter_job and filter_job.status == 'running' %}disabled{% endif %}><i class="bi bi-save" aria-hidden="true"></i> Guardar</button>
             <button class="btn btn-primary filter-submit" name="action" value="apply" {% if filter_config_error or (filter_job and filter_job.status == 'running') %}disabled{% endif %}
                 onclick="return confirm('Se aplicará la política generada a los cuatro recursivos y se reiniciarán sus servicios. ¿Continuar?');"><i class="bi bi-check2-circle" aria-hidden="true"></i> Aplicar filtros</button>
         </div>
     </div>
     {% endif %}
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-white py-3"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> <strong>Forwarders</strong><div class="small text-muted mt-1">Servidores a los que reenviar las consultas de cada zona.</div></div>
+    <div class="card-body">
+        <label class="visually-hidden" for="forwarders">Contenido de forward-zones</label>
+        <textarea class="form-control font-monospace mb-3" style="font-size:.85rem;" id="forwarders" name="forwarders" rows="8" maxlength="1048576" placeholder="# Zonas privadas&#10;example.org=192.0.2.10,192.0.2.11&#10;+example.net=192.0.2.20" {% if session.role != 'admin' %}readonly{% endif %}>{{ filter_state.forwarders|default('') }}</textarea>
+        <p class="small text-muted mb-3">Una zona por línea: <code>zona=IP,IP:puerto</code>. El prefijo <code>+</code> solicita recursión al destino. Pega tu lista actual antes de aplicarla: se reemplaza el archivo completo.</p>
+        {% if session.role == 'admin' %}
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+            <span class="text-muted small">Aplicar forwarders solo actualiza forward-zones y reinicia los recursivos.</span>
+            <div class="d-flex gap-2">
+                <button class="btn btn-outline-primary filter-submit" name="action" value="save" {% if filter_job and filter_job.status == 'running' %}disabled{% endif %}><i class="bi bi-save" aria-hidden="true"></i> Guardar</button>
+                <button class="btn btn-primary filter-submit" name="action" value="apply_forwarders" {% if filter_config_error or (filter_job and filter_job.status == 'running') %}disabled{% endif %} onclick="return confirm('Se reemplazará forward-zones en los cuatro recursivos y se reiniciarán sus servicios. Una lista vacía elimina los forwarders. ¿Continuar?');"><i class="bi bi-check2-circle" aria-hidden="true"></i> Aplicar forwarders</button>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
 </form>
 {% if filter_targets %}
 <div class="mb-4 small text-muted">Destinos: {% for target in filter_targets %}<span class="badge bg-white text-dark border me-1">{{ target.name }} · {{ target.host }}</span>{% endfor %}</div>
@@ -48,7 +65,7 @@
     <div class="card-header bg-white"><strong>Última aplicación</strong> <span class="text-muted small">· {{ filter_job.user }}</span></div>
     <div class="card-body">
         <p id="filter-job-message" role="status" aria-live="polite">{{ filter_job.message }}</p>
-        <div id="filter-job-stats" class="small text-muted mb-3">{% if filter_job.stats %}Dominios finales: {{ filter_job.stats.total }} · Excluidos por lista blanca: {{ filter_job.stats.excluded }}{% endif %}</div>
+        <div id="filter-job-stats" class="small text-muted mb-3">{% if filter_job.stats and filter_job.stats.zones is defined %}Zonas reenviadas: {{ filter_job.stats.zones }}{% elif filter_job.stats %}Dominios finales: {{ filter_job.stats.total }} · Excluidos por lista blanca: {{ filter_job.stats.excluded }}{% endif %}</div>
         <div id="filter-job-results">{% for result in filter_job.results %}<div class="mb-2"><strong>{{ result.name }}</strong> · {{ {"ready": "Comprobado", "applying": "Aplicando…", "success": "Aplicado", "error": "Error"}.get(result.status, result.status) }}<div class="small text-muted">{{ result.detail }}</div></div>{% endfor %}</div>
     </div>
 </div>
@@ -62,7 +79,7 @@
             if (!response.ok) throw new Error('status');
             const job = await response.json();
             document.getElementById('filter-job-message').textContent = job.message;
-            if (job.stats) document.getElementById('filter-job-stats').textContent = `Dominios finales: ${job.stats.total} · Excluidos por lista blanca: ${job.stats.excluded}`;
+            if (job.stats) document.getElementById('filter-job-stats').textContent = job.kind === 'forward-zones' ? `Zonas reenviadas: ${job.stats.zones}` : `Dominios finales: ${job.stats.total} · Excluidos por lista blanca: ${job.stats.excluded}`;
             const results = document.getElementById('filter-job-results');
             results.replaceChildren();
             const labels = {ready: 'Comprobado', applying: 'Aplicando…', success: 'Aplicado', error: 'Error'};
