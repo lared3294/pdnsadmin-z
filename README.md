@@ -4,6 +4,8 @@ Interfaz web en español para administrar zonas y registros de **PowerDNS Author
 
 Los cambios de registros se guardan en una lista de pendientes: puedes revisarlos, descartarlos o confirmarlos antes de enviarlos a PowerDNS.
 
+**Sin bases de datos intermedias:** pdnsadmin-z consulta y modifica directamente los servidores PowerDNS a través de su API HTTP. No mantiene una base de datos propia de zonas o registros. Los cambios de registros pendientes se conservan temporalmente en la sesión del usuario y se envían a PowerDNS al confirmarlos; la creación y eliminación de zonas se ejecutan directamente al realizar la operación.
+
 ## Capturas de pantalla
 
 Las capturas se generaron a partir de las plantillas reales del proyecto con un usuario, dominios y direcciones ficticios.
