@@ -18,7 +18,7 @@ Las capturas se generaron a partir de las plantillas reales del proyecto con un 
 
 ## Funcionalidades
 
-- Selección de servidor **Interno** o **Internet**, cada uno con su URL y clave API.
+- Selección de servidor **DNS privado** o **DNS público**, cada uno con su URL y clave API.
 - Consulta de zonas y sus conjuntos de registros (RRsets).
 - Búsqueda global en el servidor seleccionado, con comodines `*` y `?`.
 - Alta, modificación y borrado de registros con revisión previa.
@@ -299,7 +299,7 @@ Copia las rutas de certificados y la dirección de escucha de tu antiguo script 
 ### Consultar y buscar
 
 1. Abre la aplicación e inicia sesión mediante Keycloak.
-2. Selecciona **Interno** o **Internet**. La cabecera cambia de color para identificar el servidor activo.
+2. Selecciona **DNS privado** o **DNS público**. La cabecera cambia de color para identificar el servidor activo.
 3. Haz clic en una zona para consultar nombres, tipos, TTL y valores.
 4. Usa la búsqueda de la cabecera para localizar registros en todas las zonas del servidor seleccionado. Por ejemplo, `www*` o `*example.org*`.
 

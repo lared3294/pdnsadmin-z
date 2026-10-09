@@ -137,7 +137,7 @@
                                 </td>
                                 <td>
                                     <span class="badge border border-secondary text-secondary">
-                                        {{ c.server|default('internal')|upper }}
+                                        {% if c.server|default('internal') == 'external' %}DNS público{% else %}DNS privado{% endif %}
                                     </span>
                                 </td>
                                 <td><small>{{ c.zone }}</small></td>
