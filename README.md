@@ -38,7 +38,80 @@ El backend admite `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `SOA`, `PTR`, `SRV` y
 
 **No hay usuarios ni contraseñas locales.** El archivo de ejemplo deja OIDC deshabilitado para que configures tu proveedor; en ese estado se muestra una advertencia y no se puede iniciar sesión en el panel.
 
-## Instalación
+## Instalación automática (recomendada)
+
+Descarga el proyecto y ejecuta el instalador desde su carpeta:
+
+```sh
+git clone https://github.com/lared3294/pdnsadmin-z.git
+cd pdnsadmin-z
+./install.sh --dry-run
+sudo ./install.sh
+sudoedit /etc/pdnsadmin/config.ini
+```
+
+Si no tienes `git`, puedes descargar y descomprimir el repositorio desde GitHub. El instalador debe ejecutarse desde una copia completa del proyecto y requiere Bash y Linux.
+
+El instalador:
+
+- Detecta systemd en ejecución o SysV con su herramienta de registro.
+- Instala Python, soporte para entornos virtuales y los paquetes auxiliares mediante `apt-get`, `dnf`, `yum` o `zypper`.
+- Copia solo el código y las plantillas a `/opt/pdnsadmin-z`: no copia tu INI local, certificados, claves, ZIPs ni `.git`.
+- Crea `.venv`, instala `requirements.txt` y comprueba las dependencias con `pip check`.
+- Crea el usuario y grupo de sistema **`pdnsadmin`**, sin login interactivo.
+- Prepara `/etc/pdnsadmin/config.ini` con permisos `0640`, una clave de sesión aleatoria y sesiones persistentes en `/var/lib/pdnsadmin/sessions`.
+- Prepara `/etc/pdnsadmin/certs` para los certificados de un despliegue con TLS directo.
+- Instala el servicio apropiado y guarda una copia de respaldo si ya existía su archivo.
+
+**En una instalación nueva, el servicio queda sin iniciar ni habilitar.** Primero completa las URLs y claves de PowerDNS, OIDC/Keycloak, dirección de escucha y TLS. La configuración nueva tiene OIDC deshabilitado hasta que la edites. Las URLs de PowerDNS generadas usan `localhost` como identificador de ejemplo, con puertos `8081` y `8082`; adáptalas a tus instancias.
+
+Para validar la configuración y sus permisos como usuario del servicio:
+
+```sh
+sudo runuser -u pdnsadmin -- sh -c 'cd /opt/pdnsadmin-z && DNSADMIN_CONFIG=/etc/pdnsadmin/config.ini .venv/bin/gunicorn --config gunicorn.conf.py --check-config wsgi:app'
+```
+
+Esta comprobación valida el arranque y TLS; no prueba las credenciales ni la conectividad con PowerDNS y Keycloak. Si instalas certificados, hazlos legibles por el grupo `pdnsadmin`, por ejemplo:
+
+```sh
+sudo install -o root -g pdnsadmin -m 0640 fullchain.pem /etc/pdnsadmin/certs/fullchain.pem
+sudo install -o root -g pdnsadmin -m 0640 privkey.pem /etc/pdnsadmin/certs/privkey.pem
+```
+
+Después de configurar, en **systemd**:
+
+```sh
+sudo systemctl enable --now pdnsadmin
+sudo systemctl status pdnsadmin
+sudo journalctl -u pdnsadmin -f
+```
+
+En **SysV de Debian/Ubuntu**:
+
+```sh
+sudo update-rc.d pdnsadmin enable
+sudo service pdnsadmin start
+sudo service pdnsadmin status
+```
+
+Si el sistema usa `chkconfig`, habilita con `sudo chkconfig pdnsadmin on`. SysV requiere `start-stop-daemon` y `runuser`; el instalador prepara esos componentes en Debian/Ubuntu y comprueba su presencia en las demás distribuciones.
+
+### Opciones y reinstalación
+
+```sh
+./install.sh --help
+./install.sh --dry-run --init systemd
+sudo ./install.sh --init sysv
+sudo ./install.sh --no-packages
+```
+
+`--dry-run` muestra los comandos sin ejecutarlos y no requiere privilegios. `--init` permite elegir explícitamente el gestor, por ejemplo al preparar una máquina sin un init activo. `--no-packages` omite el gestor de paquetes del sistema, comprueba las herramientas existentes e instala igualmente las dependencias Python dentro de `.venv`.
+
+En reinstalaciones, el INI existente **se conserva byte por byte**; no se regenera la clave de sesión ni se añaden opciones automáticamente. Sus permisos se ajustan al usuario del instalador. El código, las dependencias y el archivo de servicio se actualizan; cualquier personalización de ese archivo queda en una copia `.bak.FECHA.PID`. Reaplica después tus cambios o usa un override de systemd. Una habilitación previa de systemd se conserva, aunque el instalador no ejecuta el arranque.
+
+Detén `pdnsadmin` y el antiguo `dnsadmin`, si corresponde, antes de actualizar. El instalador rechaza reemplazar una instancia activa que detecta. Si migras desde una instalación manual con `www-data`, revisa que el nuevo usuario `pdnsadmin` pueda leer los certificados y escribir el directorio de sesiones que conserva tu INI.
+
+## Instalación manual
 
 ### 1. Descargar y preparar Python
 
@@ -191,9 +264,9 @@ Si Nginx termina HTTPS, usa `[tls] enabled = False` y `[server] bind = 127.0.0.1
 
 El puerto `8443` permite ejecutar el servicio sin privilegios de root. Para servir en `443`, utiliza un proxy inverso o adapta los permisos de acceso a puertos privilegiados de tu sistema.
 
-## Instalar el servicio pdnsadmin
+## Instalar manualmente el servicio pdnsadmin
 
-La unidad systemd y el script SysV comparten estas ubicaciones:
+Estos ejemplos manuales usan `www-data`; el instalador automático adapta el servicio para usar la cuenta dedicada `pdnsadmin` y sesiones persistentes. La unidad systemd y el script SysV de los ejemplos comparten estas ubicaciones:
 
 | Elemento | Ubicación |
 | --- | --- |
