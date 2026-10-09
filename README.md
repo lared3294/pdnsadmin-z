@@ -40,7 +40,29 @@ El backend admite `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `SOA`, `PTR`, `SRV` y
 
 ## Instalación automática (recomendada)
 
-Descarga el proyecto y ejecuta el instalador desde su carpeta:
+Puedes instalar sin Git ni clonar el repositorio, usando `curl` y Bash:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lared3294/pdnsadmin-z/main/install.sh | sudo bash -s --
+sudoedit /etc/pdnsadmin/config.ini
+```
+
+El script descarga el proyecto por HTTPS en un directorio temporal, instala los archivos y limpia la descarga al terminar. Necesitas `curl` y `tar` para ese primer paso; Git no es necesario.
+
+Para previsualizar desde `curl`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lared3294/pdnsadmin-z/main/install.sh | bash -s -- --dry-run
+```
+
+También puedes descargar primero el script para revisarlo y ejecutarlo después:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lared3294/pdnsadmin-z/main/install.sh -o install.sh
+sudo bash install.sh
+```
+
+Si ya tienes el proyecto completo, ejecuta el instalador desde su carpeta:
 
 ```sh
 git clone https://github.com/lared3294/pdnsadmin-z.git
@@ -50,7 +72,7 @@ sudo ./install.sh
 sudoedit /etc/pdnsadmin/config.ini
 ```
 
-Si no tienes `git`, puedes descargar y descomprimir el repositorio desde GitHub. El instalador debe ejecutarse desde una copia completa del proyecto y requiere Bash y Linux.
+Si no tienes `git`, puedes descargar y descomprimir el repositorio desde GitHub. El instalador requiere Bash y Linux. Si se ejecuta sin una copia completa del proyecto, la descarga automáticamente.
 
 El instalador:
 
@@ -86,7 +108,7 @@ sudo systemctl status pdnsadmin
 sudo journalctl -u pdnsadmin -f
 ```
 
-En **SysV de Debian/Ubuntu**:
+En **SysV de Devuan/antiX**:
 
 ```sh
 sudo update-rc.d pdnsadmin enable
@@ -94,7 +116,7 @@ sudo service pdnsadmin start
 sudo service pdnsadmin status
 ```
 
-Si el sistema usa `chkconfig`, habilita con `sudo chkconfig pdnsadmin on`. SysV requiere `start-stop-daemon` y `runuser`; el instalador prepara esos componentes en Debian/Ubuntu y comprueba su presencia en las demás distribuciones.
+Si el sistema usa `chkconfig`, habilita con `sudo chkconfig pdnsadmin on`. SysV requiere `start-stop-daemon` y `runuser`; el instalador prepara esos componentes en Devuan/antiX y comprueba su presencia en las demás distribuciones.
 
 ### Opciones y reinstalación
 
@@ -105,7 +127,7 @@ sudo ./install.sh --init sysv
 sudo ./install.sh --no-packages
 ```
 
-`--dry-run` muestra los comandos sin ejecutarlos y no requiere privilegios. `--init` permite elegir explícitamente el gestor, por ejemplo al preparar una máquina sin un init activo. `--no-packages` omite el gestor de paquetes del sistema, comprueba las herramientas existentes e instala igualmente las dependencias Python dentro de `.venv`.
+`--dry-run` muestra los comandos de instalación sin ejecutarlos y no requiere privilegios. Si falta el proyecto local, descarga y extrae una copia temporal para preparar la simulación. `--ref` permite elegir la rama, etiqueta o commit que se descarga (por defecto `main`); se usa cuando falta una copia local completa. `--init` permite elegir explícitamente el gestor, por ejemplo al preparar una máquina sin un init activo. `--no-packages` omite el gestor de paquetes del sistema, comprueba las herramientas existentes e instala igualmente las dependencias Python dentro de `.venv`.
 
 En reinstalaciones, el INI existente **se conserva byte por byte**; no se regenera la clave de sesión ni se añaden opciones automáticamente. Sus permisos se ajustan al usuario del instalador. El código, las dependencias y el archivo de servicio se actualizan; cualquier personalización de ese archivo queda en una copia `.bak.FECHA.PID`. Reaplica después tus cambios o usa un override de systemd. Una habilitación previa de systemd se conserva, aunque el instalador no ejecuta el arranque.
 
@@ -275,7 +297,7 @@ Estos ejemplos manuales usan `www-data`; el instalador automático adapta el ser
 | Usuario y grupo del servicio | `www-data` |
 | Sesiones recomendadas | `/run/pdnsadmin/sessions` |
 
-Los comandos siguientes son un ejemplo para Debian/Ubuntu. En otras distribuciones adapta el usuario/grupo, el gestor de paquetes y las rutas. No instales el mismo servicio simultáneamente con systemd y SysV.
+Los comandos siguientes sirven como ejemplo para sistemas basados en Debian: Debian/Ubuntu con systemd y Devuan/antiX con SysV. En otras distribuciones adapta el usuario/grupo, el gestor de paquetes y las rutas. No instales el mismo servicio simultáneamente con systemd y SysV.
 
 ### Preparar la instalación
 
@@ -329,9 +351,9 @@ sudo systemctl stop pdnsadmin
 
 Para otra ruta de instalación o usuario, edita la unidad con `sudo systemctl edit --full pdnsadmin`, ajusta `User`, `Group`, `WorkingDirectory`, `Environment`, `ExecStart` y `ExecReload`, y luego recarga systemd y reinicia el servicio. La [documentación de Gunicorn](https://gunicorn.org/configure/) describe la carga y validación de su configuración.
 
-### Sistemas con SysV init
+### Sistemas con SysV init (Devuan / antiX)
 
-El script `init/pdnsadmin` y su copia `pdnsadmin.init` usan las mismas rutas y configuración. Revisa sus variables iniciales si tu instalación es distinta. Requieren `start-stop-daemon` y `runuser`.
+El script `init/pdnsadmin` usan las mismas rutas y configuración. Revisa sus variables iniciales si tu instalación es distinta. Requieren `start-stop-daemon` y `runuser`.
 
 ```sh
 sudo install -m 0755 /opt/pdnsadmin-z/init/pdnsadmin /etc/init.d/pdnsadmin
@@ -356,7 +378,7 @@ Antes de habilitar `pdnsadmin`, detén y deshabilita el servicio anterior para e
 sudo systemctl disable --now dnsadmin
 ```
 
-En SysV init de Debian/Ubuntu:
+En SysV init de Devuan/antiX:
 
 ```sh
 sudo service dnsadmin stop

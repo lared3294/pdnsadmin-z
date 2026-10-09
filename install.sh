@@ -4,7 +4,12 @@ set -euo pipefail
 
 export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
-SOURCE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+SOURCE_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+    SOURCE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+fi
+REPO_REF=main
+DOWNLOAD_DIR=""
 APP_DIR=/opt/pdnsadmin-z
 CONFIG_DIR=/etc/pdnsadmin
 STATE_DIR=/var/lib/pdnsadmin
@@ -19,6 +24,7 @@ usage() {
     cat <<'EOF'
 Uso: sudo ./install.sh [opciones]
   --init auto|systemd|sysv  Gestor de servicios (por defecto: detección automática)
+  --ref REF              Rama, etiqueta o commit a descargar (por defecto: main)
   --no-packages           Omitir paquetes del sistema; comprobar dependencias
   --dry-run               Mostrar acciones sin modificar el sistema (no requiere sudo)
   -h, --help             Mostrar esta ayuda
@@ -37,6 +43,7 @@ run() {
 parse_args() {
     while (($#)); do
         case "$1" in
+            --ref) (($# >= 2)) || fail 'Falta el valor de --ref'; REPO_REF=$2; shift 2 ;;
             --init) (($# >= 2)) || fail 'Falta el valor de --init'; INIT_MODE=$2; shift 2 ;;
             --no-packages) INSTALL_PACKAGES=0; shift ;;
             --dry-run) DRY_RUN=1; shift ;;
@@ -44,7 +51,37 @@ parse_args() {
             *) fail "Opción desconocida: $1" ;;
         esac
     done
+    [[ "$REPO_REF" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/-]*$ ]] || fail 'Referencia Git inválida.'
     case "$INIT_MODE" in auto|systemd|sysv) ;; *) fail '--init debe ser auto, systemd o sysv' ;; esac
+}
+
+source_complete() {
+    [[ -n "$SOURCE_DIR" ]] || return 1
+    local name
+    for name in pdnsadmin-z.py wsgi.py gunicorn.conf.py requirements.txt config.example.ini README.md install.sh init/pdnsadmin systemd/pdnsadmin.service; do
+        [[ -f "$SOURCE_DIR/$name" ]] || return 1
+    done
+}
+
+cleanup_download() {
+    if [[ -n "$DOWNLOAD_DIR" ]]; then rm -rf -- "$DOWNLOAD_DIR"; fi
+}
+
+prepare_source() {
+    source_complete && return 0
+    command -v curl >/dev/null || fail 'La descarga requiere curl.'
+    command -v tar >/dev/null || fail 'La descarga requiere tar.'
+    DOWNLOAD_DIR=$(mktemp -d /tmp/pdnsadmin-source.XXXXXXXX)
+    trap cleanup_download EXIT
+    printf 'Descargando pdnsadmin-z (%s) por HTTPS...\n' "$REPO_REF"
+    curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+        --retry 3 --connect-timeout 20 \
+        "https://codeload.github.com/lared3294/pdnsadmin-z/tar.gz/$REPO_REF" \
+        --output "$DOWNLOAD_DIR/source.tar.gz"
+    mkdir "$DOWNLOAD_DIR/project"
+    tar -xzf "$DOWNLOAD_DIR/source.tar.gz" --strip-components=1 -C "$DOWNLOAD_DIR/project"
+    SOURCE_DIR="$DOWNLOAD_DIR/project"
+    source_complete || fail 'La descarga no contiene todos los archivos necesarios.'
 }
 
 systemd_running() {
@@ -88,7 +125,7 @@ check_dependencies() {
     if [[ "$SELECTED_INIT" == systemd ]]; then
         command -v systemctl >/dev/null || fail 'Falta systemctl.'
     else
-        command -v start-stop-daemon >/dev/null || fail 'SysV requiere start-stop-daemon (paquete dpkg en Debian/Ubuntu).'
+        command -v start-stop-daemon >/dev/null || fail 'SysV requiere start-stop-daemon (paquete dpkg en Devuan/antiX).'
         { command -v update-rc.d >/dev/null || command -v chkconfig >/dev/null; } || fail 'SysV requiere update-rc.d o chkconfig.'
     fi
 }
@@ -224,10 +261,7 @@ main() {
     parse_args "$@"
     (( DRY_RUN )) || [[ "$EUID" == 0 ]] || fail 'Ejecuta con sudo, o usa --dry-run para previsualizar.'
     [[ "$(uname -s)" == Linux ]] || fail 'El instalador requiere Linux.'
-    local name
-    for name in pdnsadmin-z.py wsgi.py gunicorn.conf.py requirements.txt config.example.ini README.md init/pdnsadmin systemd/pdnsadmin.service; do
-        [[ -f "$SOURCE_DIR/$name" ]] || fail "Falta el archivo $name en el proyecto.";
-    done
+    prepare_source
     SELECTED_INIT=$(detect_init)
     if (( INSTALL_PACKAGES )); then PACKAGE_MANAGER=$(detect_packages); fi
     printf 'Instalación de pdnsadmin: %s; aplicación: %s\n' "$SELECTED_INIT" "$APP_DIR"
@@ -250,4 +284,4 @@ main() {
     fi
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi
+if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

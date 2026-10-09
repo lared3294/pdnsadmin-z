@@ -4,6 +4,7 @@ import configparser
 import os
 import subprocess
 import tempfile
+import tarfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +35,7 @@ class InstallerTests(unittest.TestCase):
     def test_help_and_argument_errors(self):
         help_result = subprocess.run([str(INSTALLER), '--help'], capture_output=True, text=True, check=True)
         self.assertIn('--dry-run', help_result.stdout)
-        for args in [['--init'], ['--init', 'other'], ['--unknown']]:
+        for args in [['--init'], ['--init', 'other'], ['--ref'], ['--ref', '-bad'], ['--unknown']]:
             result = subprocess.run([str(INSTALLER), *args], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
 
@@ -106,6 +107,45 @@ detect_init'''
                 backups = list(target.parent.glob(target.name + '.bak.*'))
                 self.assertEqual(len(backups), 1)
                 self.assertEqual(backups[0].read_text(), 'previous service')
+
+    def test_stdin_and_standalone_download_without_git(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / 'project.tar.gz'
+            required = ['pdnsadmin-z.py', 'wsgi.py', 'gunicorn.conf.py', 'requirements.txt',
+                        'config.example.ini', 'README.md', 'install.sh', 'init/pdnsadmin',
+                        'systemd/pdnsadmin.service', 'template/dashboard.html',
+                        'template/login.html', 'template/review.html']
+            with tarfile.open(archive, 'w:gz') as tar:
+                for name in required:
+                    tar.add(ROOT / name, arcname='pdnsadmin-z/' + name)
+            env = dict(os.environ, PDNS_TEST_ARCHIVE=str(archive))
+            wrapper = r"""curl() { cp "$PDNS_TEST_ARCHIVE" "${@: -1}"; }; export -f curl
+"""
+            standalone = root / 'install.sh'; standalone.write_bytes(INSTALLER.read_bytes())
+            for mode in ['stdin', 'standalone']:
+                command = 'bash -s --' if mode == 'stdin' else 'bash "$1"'
+                result = subprocess.run(['bash', '-c', wrapper + command +
+                                         ' --dry-run --init sysv --no-packages',
+                                         'test', str(standalone)],
+                                        input=INSTALLER.read_text() if mode == 'stdin' else None,
+                                        text=True, capture_output=True, env=env, check=True)
+                self.assertIn('Descargando pdnsadmin-z', result.stdout)
+                self.assertIn('pip check', result.stdout)
+                self.assertNotIn('git clone', result.stdout)
+                # The extracted project must be removed by the EXIT trap.
+                import re
+                download = re.search(r'/tmp/pdnsadmin-source\.[A-Za-z0-9]+', result.stdout)
+                self.assertIsNotNone(download)
+                self.assertFalse(Path(download.group()).exists())
+
+    def test_failed_download_stops_before_installing(self):
+        wrapper = 'curl() { return 22; }; export -f curl; bash -s -- --dry-run --init systemd'
+        result = subprocess.run(['bash', '-c', wrapper], input=INSTALLER.read_text(),
+                                text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('apt-get install', result.stdout)
+        self.assertNotIn('pip install', result.stdout)
 
     def test_active_service_is_rejected_before_changes(self):
         result = self.shell('systemd_running() { return 0; }; systemctl() { return 0; }; check_running_services', check=False)
