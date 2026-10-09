@@ -1,0 +1,28 @@
+[Unit]
+Description=pdnsadmin - PowerDNS web administration
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/pdnsadmin-z
+Environment=DNSADMIN_CONFIG=/etc/pdnsadmin/config.ini
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/pdnsadmin-z/.venv/bin/gunicorn --config /opt/pdnsadmin-z/gunicorn.conf.py wsgi:app
+ExecReload=/opt/pdnsadmin-z/.venv/bin/gunicorn --config /opt/pdnsadmin-z/gunicorn.conf.py --check-config wsgi:app
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=45
+UMask=0077
+RuntimeDirectory=pdnsadmin
+RuntimeDirectoryMode=0750
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pdnsadmin
+
+[Install]
+WantedBy=multi-user.target

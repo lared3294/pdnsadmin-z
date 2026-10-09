@@ -1,0 +1,90 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          pdnsadmin
+# Required-Start:    $network $local_fs $remote_fs
+# Required-Stop:     $network $local_fs $remote_fs
+# Default-Start:    2 3 4 5
+# Default-Stop:     0 1 6
+# Short-Description: PowerDNS web administration
+### END INIT INFO
+
+# Adaptar rutas y usuario al instalar. TLS, bind y workers se leen del INI.
+APP_DIR="/opt/pdnsadmin-z"
+CONFIG_FILE="/etc/pdnsadmin/config.ini"
+RUN_AS="www-data"
+RUN_GROUP="www-data"
+DAEMON="$APP_DIR/.venv/bin/gunicorn"
+PIDFILE="/run/pdnsadmin/pdnsadmin.pid"
+LOG_DIR="/var/log/pdnsadmin"
+LOGFILE="$LOG_DIR/access.log"
+ERRFILE="$LOG_DIR/error.log"
+
+prepare_dirs() {
+    install -d -o "$RUN_AS" -g "$RUN_GROUP" -m 0750 /run/pdnsadmin "$LOG_DIR" || return 1
+    touch "$LOGFILE" "$ERRFILE" || return 1
+    chown "$RUN_AS:$RUN_GROUP" "$LOGFILE" "$ERRFILE" || return 1
+    chmod 0640 "$LOGFILE" "$ERRFILE"
+}
+
+is_running() {
+    [ -r "$PIDFILE" ] || return 1
+    PID=$(cat "$PIDFILE")
+    case "$PID" in ''|*[!0-9]*|0) return 1 ;; esac
+    kill -0 "$PID" 2>/dev/null
+}
+
+check_config() {
+    (cd "$APP_DIR" && runuser -u "$RUN_AS" -- env DNSADMIN_CONFIG="$CONFIG_FILE" \
+        "$DAEMON" --config "$APP_DIR/gunicorn.conf.py" --check-config wsgi:app)
+}
+
+do_start() {
+    if is_running; then
+        echo "pdnsadmin ya está activo (PID $PID)."
+        return 0
+    fi
+    prepare_dirs || return 1
+    check_config || return 1
+    start-stop-daemon --start --pidfile "$PIDFILE" --chuid "$RUN_AS:$RUN_GROUP" --chdir "$APP_DIR" \
+        --startas /usr/bin/env -- DNSADMIN_CONFIG="$CONFIG_FILE" \
+        "$DAEMON" --config "$APP_DIR/gunicorn.conf.py" \
+        --daemon --pid "$PIDFILE" --access-logfile "$LOGFILE" \
+        --error-logfile "$ERRFILE" wsgi:app || return 1
+    sleep 1
+    if is_running; then
+        echo "pdnsadmin iniciado (PID $PID)."
+        return 0
+    fi
+    echo "pdnsadmin no arrancó. Revisar $ERRFILE."
+    return 1
+}
+
+do_stop() {
+    if ! is_running; then
+        echo "pdnsadmin está detenido."
+        return 0
+    fi
+    start-stop-daemon --stop --pidfile "$PIDFILE" --retry TERM/30/KILL/5 || return 1
+    rm -f "$PIDFILE"
+    echo "pdnsadmin detenido."
+}
+
+case "$1" in
+    start) do_start ;;
+    stop) do_stop ;;
+    restart) do_stop && do_start ;;
+    reload)
+        if is_running; then check_config && kill -HUP "$PID"; else echo "pdnsadmin está detenido."; exit 3; fi
+        ;;
+    status)
+        if is_running; then echo "pdnsadmin activo (PID $PID)."; else echo "pdnsadmin está detenido."; exit 3; fi
+        ;;
+    debug)
+        prepare_dirs || exit 1
+        cd "$APP_DIR" || exit 1
+        exec runuser -u "$RUN_AS" -- env DNSADMIN_CONFIG="$CONFIG_FILE" \
+            "$DAEMON" --config "$APP_DIR/gunicorn.conf.py" wsgi:app
+        ;;
+    tail) tail -n 80 "$ERRFILE" "$LOGFILE" ;;
+    *) echo "Uso: /etc/init.d/pdnsadmin {start|stop|restart|reload|status|debug|tail}"; exit 1 ;;
+esac

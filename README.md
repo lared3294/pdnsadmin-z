@@ -48,12 +48,11 @@ cd pdnsadmin-z
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
-python -m pip install cachelib gunicorn
 cp config.example.ini config.ini
 chmod 600 config.ini
 ```
 
-`cachelib` es necesario para las sesiones y `gunicorn` para el servidor WSGI; actualmente se instalan por separado porque no están incluidos en `requirements.txt`.
+`requirements.txt` incluye `cachelib` para las sesiones y `gunicorn` para el servidor WSGI.
 
 En Debian/Ubuntu, si falta el módulo `venv`, instala los paquetes `python3-venv` y `python3-pip` antes de crear el entorno.
 
@@ -141,7 +140,7 @@ La aplicación acepta los nombres de grupo con o sin `/` inicial. Si el usuario 
 Desde la carpeta del proyecto, con el entorno virtual activado:
 
 ```sh
-gunicorn --workers 3 --bind 127.0.0.1:5000 wsgi:app
+gunicorn --config gunicorn.conf.py wsgi:app
 ```
 
 Para una prueba local por HTTP, cambia temporalmente `session_secure = False`, usa `http://127.0.0.1:5000/callback` como `redirect_uri` y registra esa misma URI en Keycloak. Registra también `http://127.0.0.1:5000/login` para el retorno del cierre de sesión. Abre `http://127.0.0.1:5000` en el navegador. En producción, vuelve a `session_secure = True` y usa HTTPS.
@@ -169,7 +168,131 @@ server {
 
 Para ese despliegue con un único proxy confiable, configura `trust_proxy = True`, `proxy_hops = 1` y `session_secure = True`. Gunicorn debe ser accesible a través del proxy confiable para que las cabeceras reenviadas representen correctamente el host y el esquema HTTPS.
 
-Los archivos `dnsadmin.init` e `init/dnsadmin` contienen ejemplos de servicios SysV. Revisa rutas, usuario, ejecutable de Gunicorn, certificados y opciones antes de instalarlos. No forman parte de la instalación automática.
+### HTTPS directo desde Gunicorn
+
+Si Gunicorn termina TLS, configura el INI así:
+
+```ini
+[server]
+bind = 0.0.0.0:8443
+workers = 3
+
+[tls]
+enabled = True
+certfile = /etc/pdnsadmin/certs/fullchain.pem
+keyfile = /etc/pdnsadmin/certs/privkey.pem
+```
+
+Configura también `session_secure = True` y una URI OIDC que coincida con la dirección pública, por ejemplo `https://dnsadmin.example.org:8443/callback`. Usa `trust_proxy = False` si el navegador conecta directamente a Gunicorn.
+
+Las rutas relativas de certificados se resuelven desde la carpeta del **archivo INI**, no desde el directorio de trabajo. El certificado puede incluir la cadena intermedia; la clave debe estar sin contraseña y ambos archivos deben ser legibles por el usuario del servicio. Al arrancar se comprueba que se puedan cargar y que el certificado corresponda a la clave. Si falla la validación, el proceso se detiene con un error; no pasa a HTTP silenciosamente. Esta comprobación no sustituye verificar vigencia, nombre de dominio y confianza de la cadena.
+
+Si Nginx termina HTTPS, usa `[tls] enabled = False` y `[server] bind = 127.0.0.1:5000`; los certificados se configuran en Nginx. `session_secure = True` se mantiene para el acceso del navegador por HTTPS.
+
+El puerto `8443` permite ejecutar el servicio sin privilegios de root. Para servir en `443`, utiliza un proxy inverso o adapta los permisos de acceso a puertos privilegiados de tu sistema.
+
+## Instalar el servicio pdnsadmin
+
+La unidad systemd y el script SysV comparten estas ubicaciones:
+
+| Elemento | Ubicación |
+| --- | --- |
+| Aplicación y entorno virtual | `/opt/pdnsadmin-z` y `/opt/pdnsadmin-z/.venv` |
+| Configuración | `/etc/pdnsadmin/config.ini` |
+| Usuario y grupo del servicio | `www-data` |
+| Sesiones recomendadas | `/run/pdnsadmin/sessions` |
+
+Los comandos siguientes son un ejemplo para Debian/Ubuntu. En otras distribuciones adapta el usuario/grupo, el gestor de paquetes y las rutas. No instales el mismo servicio simultáneamente con systemd y SysV.
+
+### Preparar la instalación
+
+```sh
+sudo apt install python3-venv python3-pip git
+sudo git clone https://github.com/lared3294/pdnsadmin-z.git /opt/pdnsadmin-z
+sudo python3 -m venv /opt/pdnsadmin-z/.venv
+sudo /opt/pdnsadmin-z/.venv/bin/python -m pip install -r /opt/pdnsadmin-z/requirements.txt
+sudo install -d -o root -g www-data -m 0750 /etc/pdnsadmin
+sudo install -o root -g www-data -m 0640 /opt/pdnsadmin-z/config.example.ini /etc/pdnsadmin/config.ini
+sudoedit /etc/pdnsadmin/config.ini
+```
+
+Si `/opt/pdnsadmin-z` ya contiene tu instalación, conserva ese directorio y omite el clon. Completa PowerDNS, OIDC, la clave de sesión, `[server]` y `[tls]` según los apartados anteriores. Para las sesiones, establece:
+
+```ini
+[flask]
+# Conservar aquí también secret_key y el resto de las opciones del despliegue.
+session_file_dir = /run/pdnsadmin/sessions
+```
+
+Con TLS directo, instala los certificados en las rutas configuradas. Por ejemplo, desde la carpeta que contiene tus archivos:
+
+```sh
+sudo install -d -o root -g www-data -m 0750 /etc/pdnsadmin/certs
+sudo install -o root -g www-data -m 0640 fullchain.pem /etc/pdnsadmin/certs/fullchain.pem
+sudo install -o root -g www-data -m 0640 privkey.pem /etc/pdnsadmin/certs/privkey.pem
+```
+
+El usuario `www-data` necesita lectura del código, del INI y de los certificados, y escritura del directorio de sesiones. Conserva el código y el entorno virtual bajo propiedad de root. Si usas enlaces a certificados gestionados por otra herramienta, comprueba también permisos de sus directorios de destino.
+
+### Sistemas con systemd
+
+```sh
+sudo install -m 0644 /opt/pdnsadmin-z/systemd/pdnsadmin.service /etc/systemd/system/pdnsadmin.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now pdnsadmin
+sudo systemctl status pdnsadmin
+```
+
+La unidad crea `/run/pdnsadmin`, ejecuta Gunicorn en primer plano con el usuario `www-data`, envía su salida al journal y reinicia el proceso si falla. Para consultar logs y administrar el servicio:
+
+```sh
+sudo journalctl -u pdnsadmin -f
+sudo systemctl reload pdnsadmin
+sudo systemctl restart pdnsadmin
+sudo systemctl stop pdnsadmin
+```
+
+`reload` valida la configuración antes de enviar HUP a Gunicorn. Cambios de dirección o de modo TLS deben aplicarse mediante `restart`. Tras renovar certificados en las mismas rutas, usa `reload`. Los eventos de auditoría de la aplicación siguen enviándose a syslog con el nombre `pdnsadmin`.
+
+Para otra ruta de instalación o usuario, edita la unidad con `sudo systemctl edit --full pdnsadmin`, ajusta `User`, `Group`, `WorkingDirectory`, `Environment`, `ExecStart` y `ExecReload`, y luego recarga systemd y reinicia el servicio. La [documentación de Gunicorn](https://gunicorn.org/configure/) describe la carga y validación de su configuración.
+
+### Sistemas con SysV init
+
+El script `init/pdnsadmin` y su copia `pdnsadmin.init` usan las mismas rutas y configuración. Revisa sus variables iniciales si tu instalación es distinta. Requieren `start-stop-daemon` y `runuser`.
+
+```sh
+sudo install -m 0755 /opt/pdnsadmin-z/init/pdnsadmin /etc/init.d/pdnsadmin
+sudo update-rc.d pdnsadmin defaults
+sudo service pdnsadmin start
+sudo service pdnsadmin status
+```
+
+El script crea los directorios de ejecución y logs, comprueba la configuración como usuario del servicio y arranca Gunicorn. Los logs de Gunicorn quedan en `/var/log/pdnsadmin/access.log` y `/var/log/pdnsadmin/error.log`.
+
+```sh
+sudo service pdnsadmin reload
+sudo service pdnsadmin restart
+sudo /etc/init.d/pdnsadmin tail
+```
+
+### Migrar desde el servicio dnsadmin
+
+Antes de habilitar `pdnsadmin`, detén y deshabilita el servicio anterior para evitar dos instancias escuchando en el mismo puerto. En systemd:
+
+```sh
+sudo systemctl disable --now dnsadmin
+```
+
+En SysV init de Debian/Ubuntu:
+
+```sh
+sudo service dnsadmin stop
+sudo update-rc.d dnsadmin disable
+```
+
+Copia las rutas de certificados y la dirección de escucha de tu antiguo script al nuevo INI. Cambia también rutas de automatizaciones o comandos que todavía invoquen el servicio anterior.
+
+`/run` es temporal: las sesiones allí se pierden al reiniciar el equipo o detener el servicio systemd. Aplica o descarta los cambios pendientes antes de esas operaciones. Si necesitas conservarlas, configura un directorio persistente y crea sus permisos para el usuario del servicio.
 
 ## Uso del panel
 
@@ -211,14 +334,17 @@ Los usuarios de consulta pueden navegar y buscar, pero no modificar DNS.
 Por defecto se lee `config.ini` en el directorio de trabajo. Para utilizar otra ubicación:
 
 ```sh
-export DNSADMIN_CONFIG=/etc/pdnsadmin-z/config.ini
-gunicorn --workers 3 --bind 127.0.0.1:5000 wsgi:app
+export DNSADMIN_CONFIG=/etc/pdnsadmin/config.ini
+gunicorn --config gunicorn.conf.py wsgi:app
 ```
 
 La prioridad es **archivo INI → variable de entorno → valor por defecto**. Una opción presente en el archivo, incluso vacía, prevalece sobre su variable de entorno. Si quieres usar variables para secretos, elimina las opciones correspondientes del INI.
 
 | Opción INI | Variable de entorno |
 | --- | --- |
+| `[server] bind` / `workers` | `PDNSADMIN_BIND` / `PDNSADMIN_WORKERS` |
+| `[tls] enabled` | `PDNSADMIN_TLS_ENABLED` |
+| `[tls] certfile` / `keyfile` | `PDNSADMIN_TLS_CERTFILE` / `PDNSADMIN_TLS_KEYFILE` |
 | `[pdns] url_internal` / `key_internal` | `PDNS_API_URL_INTERNAL` / `PDNS_API_KEY_INTERNAL` |
 | `[pdns] url_external` / `key_external` | `PDNS_API_URL_EXTERNAL` / `PDNS_API_KEY_EXTERNAL` |
 | `[pdns] default_zone_kind` / `default_nameservers` | `DEFAULT_ZONE_KIND` / `DEFAULT_ZONE_NAMESERVERS` |
@@ -236,14 +362,15 @@ La prioridad es **archivo INI → variable de entorno → valor por defecto**. U
 
 | Síntoma | Qué revisar |
 | --- | --- |
-| `ModuleNotFoundError: cachelib` | Activa `.venv` e instala `cachelib` como indica la instalación. |
+| `ModuleNotFoundError: cachelib` | Activa `.venv` e instala `requirements.txt`. |
 | «La autenticación OIDC no está habilitada» | Establece `[oidc] enabled = True` y completa los datos del cliente. |
 | «No tienes permiso para acceder a esta aplicación» | Comprueba grupos del usuario y el mapper del claim `Grupos` o el configurado. |
 | Error de conexión o timeout de PowerDNS | Comprueba URL, puerto, conectividad y ACL del servidor web. |
 | Error de API / autorización | Revisa el identificador del servidor y que la clave coincida con `api-key`. |
 | Bucle de login o error CSRF en una prueba HTTP | Revisa `session_secure`, la URI de retorno y que el navegador conserve la cookie. |
 | URI de retorno incorrecta detrás del proxy | Revisa `redirect_uri`, `trust_proxy`, `proxy_hops` y las cabeceras reenviadas. |
+| Error TLS al iniciar el servicio | Revisa `certfile`, `keyfile`, permisos del usuario del servicio y que el certificado corresponda a la clave sin contraseña. |
 | Error al escribir sesiones | Revisa permisos y ubicación de `session_file_dir` para el usuario de Gunicorn. |
 | No aparecen estilos o iconos | El navegador necesita acceder a `cdn.jsdelivr.net`, usado por las plantillas. |
 
-Los eventos se envían a syslog con el nombre `dnsadmin`: revisa el destino de syslog de tu sistema para diagnosticar accesos y operaciones. `config.ini`, archivos `.pem`, claves `.key` y archivos ZIP están excluidos de Git; guarda los secretos y certificados fuera del repositorio.
+Los eventos se envían a syslog con el nombre `pdnsadmin`: revisa el destino de syslog de tu sistema para diagnosticar accesos y operaciones. `config.ini`, archivos `.pem`, claves `.key` y archivos ZIP están excluidos de Git; guarda los secretos y certificados fuera del repositorio.

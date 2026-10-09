@@ -52,7 +52,7 @@ def cfg_get(section: str, key: str, envvar: str, default: str) -> str:
 # -------------------------------------------------------------------------
 
 # configurar logger hacia syslog
-logger = logging.getLogger('dnsadmin')
+logger = logging.getLogger('pdnsadmin')
 logger.setLevel(logging.INFO)
 try:
     handler = SysLogHandler(address='/dev/log')
