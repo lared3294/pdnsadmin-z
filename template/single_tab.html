@@ -1,0 +1,68 @@
+<style>
+    html:not([data-tab-active]) body > :not(#tab-guard) { display: none !important; }
+    #tab-guard { position: fixed; inset: 0; z-index: 10000; background: #f8fafc;
+        color: #1e293b; padding: 15vh 2rem; text-align: center; font: 1rem system-ui; }
+    html[data-tab-active] #tab-guard { display: none; }
+</style>
+<noscript><style>body { display: none !important; }
+    html::after { content: "Activa JavaScript para utilizar la aplicación."; font: 1rem system-ui; }
+</style></noscript>
+<script>
+(() => {
+    let release;
+    let generation = 0;
+    let active = false;
+    function block(message) {
+        active = false;
+        delete document.documentElement.dataset.tabActive;
+        document.getElementById('tab-guard-message').textContent = message;
+    }
+    async function acquire() {
+        const attempt = ++generation;
+        block('Comprobando si la aplicación está abierta en otra pestaña…');
+        if (!navigator.locks) {
+            block('No se puede comprobar la pestaña activa. Abre la aplicación mediante HTTPS en un navegador compatible.');
+            return;
+        }
+        try {
+            await navigator.locks.request('pdnsadmin-single-tab', {ifAvailable: true}, async lock => {
+                if (attempt !== generation) return;
+                if (!lock) {
+                    block('La aplicación ya está abierta en otra pestaña. Ciérrala y pulsa Reintentar.');
+                    return;
+                }
+                active = true;
+                document.documentElement.dataset.tabActive = 'true';
+                await new Promise(resolve => { release = resolve; });
+            });
+        } catch (_) {
+            block('No se pudo obtener el bloqueo de pestaña. Recarga para reintentar.');
+        }
+    }
+    // Prevent submission even through keyboard or programmatic requestSubmit while blocked.
+    document.addEventListener('submit', event => {
+        if (!active) { event.preventDefault(); event.stopImmediatePropagation(); }
+    }, true);
+    window.addEventListener('pagehide', () => {
+        ++generation;
+        active = false;
+        delete document.documentElement.dataset.tabActive;
+        if (release) { release(); release = null; }
+    });
+    window.addEventListener('pageshow', event => { if (event.persisted) acquire(); });
+    document.addEventListener('DOMContentLoaded', () => {
+        const guard = document.createElement('section');
+        guard.id = 'tab-guard';
+        guard.setAttribute('role', 'alert');
+        const message = document.createElement('p');
+        message.id = 'tab-guard-message';
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.textContent = 'Reintentar';
+        retry.addEventListener('click', () => { if (!active) acquire(); });
+        guard.append(message, retry);
+        document.body.append(guard);
+        acquire();
+    });
+})();
+</script>

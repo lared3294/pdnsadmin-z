@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from recursor_config import FilterError, FilterStore, generate_policy, parse_hosts, parse_forwarders, read_targets, deploy_operation
+from recursor_config import FilterError, FilterStore, Target, generate_policy, parse_hosts, parse_forwarders, read_targets, deploy_operation
 
 class PolicyTests(unittest.TestCase):
     def test_user_hosts_examples_comments_duplicates_escaping_and_underscores(self):
@@ -37,7 +37,7 @@ class PolicyTests(unittest.TestCase):
             generate_policy(dict(steven_enabled=True, blacklist='example.com', whitelist=''), '# empty')
 
     def test_targets_require_four_distinct_servers_without_credentials(self):
-        cfg = configparser.ConfigParser(); cfg.read_string('[filters]\ntargets=a,b,c,d\n')
+        cfg = configparser.ConfigParser(); cfg.read_string('[recursor]\ntargets=a,b,c,d\n')
         for number, name in enumerate('abcd', 1):
             cfg['recursor:' + name] = dict(host=f'192.0.2.{number}')
         targets = read_targets(cfg)
@@ -73,7 +73,7 @@ class DeploymentTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.store = FilterStore(self.temp.name)
         self.state = dict(steven_enabled=False, blacklist='example.com', whitelist='')
-        self.targets = [type('Target', (), dict(name=f'r{i}', host=f'192.0.2.{i}'))() for i in range(1, 5)]
+        self.targets = [Target(f'r{i}', f'192.0.2.{i}') for i in range(1, 5)]
 
     def run_job(self, operation):
         data = dict(id='a' * 32, status='running', message='', user='demo', results=[], stats=None)
@@ -83,16 +83,16 @@ class DeploymentTests(unittest.TestCase):
             download.assert_not_called()
         return data
 
-    def test_copies_four_targets_and_reports_partial_failure(self):
+    def test_stops_distribution_after_first_failure(self):
         calls = []
         def operation(target, payload, kind):
             calls.append(target.name)
             self.assertEqual(payload, '0.0.0.0 example.com\n')
             return target.name != 'r2', 'result'
         result = self.run_job(operation)
-        self.assertEqual(calls, ['r1', 'r2', 'r3', 'r4'])
+        self.assertEqual(calls, ['r1', 'r2'])
         self.assertEqual(result['status'], 'error')
-        self.assertEqual([r['status'] for r in result['results']], ['success', 'error', 'success', 'success'])
+        self.assertEqual([r['status'] for r in result['results']], ['success', 'error', 'skipped', 'skipped'])
 
     def test_forwarders_deploy_only_forward_zones_without_steven_download(self):
         data = dict(id='b' * 32, status='running', kind='forward-zones', results=[], stats=None)
@@ -107,6 +107,25 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(data['stats'], {'zones': 1})
         self.assertEqual(data['status'], 'success')
 
+    def test_steven_download_uses_configured_url(self):
+        self.store.steven_url = 'https://example.org/custom-hosts'
+        state = dict(self.state, steven_enabled=True)
+        data = dict(id='c' * 32, status='running', results=[], stats=None)
+        self.store._prepare()
+        with patch('recursor_config.download_steven', return_value='0.0.0.0 other.example') as download, patch('recursor_config.deploy_operation', return_value=(True, 'ok')):
+            self.store._apply(state, self.targets, data, self.store.directory / 'jobs/test.json')
+        download.assert_called_once_with('https://example.org/custom-hosts')
+        self.assertEqual(data['stats']['total'], 2)
+
+    def test_missing_steven_url_does_not_download_or_deploy(self):
+        state = dict(self.state, steven_enabled=True)
+        data = dict(id='d' * 32, status='running', results=[], stats=None)
+        with patch('recursor_config.requests.get') as get, patch('recursor_config.deploy_operation') as deploy:
+            with self.assertRaisesRegex(FilterError, 'steven_url'):
+                self.store._apply(state, self.targets, data, self.store.directory / 'jobs/test.json')
+            get.assert_not_called()
+            deploy.assert_not_called()
+
     def test_concurrent_apply_or_save_rejected(self):
         fd = self.store._lock()
         try:
@@ -117,17 +136,34 @@ class DeploymentTests(unittest.TestCase):
         self.store._write(self.store.directory / 'jobs' / ('a' * 32 + '.json'), {'status': 'running'})
         self.assertEqual(self.store.job('a' * 32)['status'], 'error')
 
-    def test_background_job_completes_and_persists_results(self):
-        import time
-        with patch('recursor_config.deploy_operation', return_value=(True, 'mock result')):
+    def test_completion_between_status_read_and_lock_is_not_reported_as_interrupted(self):
+        job_id = 'e' * 32
+        path = self.store.directory / 'jobs' / (job_id + '.json')
+        self.store._write(path, {'status': 'running'})
+        original_lock = self.store._lock
+        def complete_then_lock():
+            self.store._write(path, {'status': 'success'})
+            return original_lock()
+        with patch.object(self.store, '_lock', side_effect=complete_then_lock):
+            self.assertEqual(self.store.job(job_id)['status'], 'success')
+
+    def test_one_shot_job_completes_and_persists_results(self):
+        with patch('recursor_config.subprocess.Popen') as launch:
+            launch.return_value.poll.return_value = None
             job_id = self.store.start(self.state, self.targets, 'demo')
-            for _ in range(100):
-                job = self.store.job(job_id)
-                if job['status'] != 'running': break
-                time.sleep(.01)
-            self.assertEqual(job['status'], 'success')
-            self.assertEqual(len(job['results']), 4)
-            self.assertEqual(self.store.read()['blacklist'], 'example.com')
+        self.assertEqual(self.store.job(job_id)['status'], 'running')
+        with self.assertRaises(FilterError):
+            self.store.save(self.state)
+        with patch('recursor_config.deploy_operation', return_value=(True, 'mock result')):
+            self.assertTrue(self.store.run_job(job_id))
+        job = self.store.job(job_id)
+        self.assertEqual(job['status'], 'success')
+        self.assertEqual(len(job['results']), 4)
+        self.assertEqual(self.store.read()['blacklist'], 'example.com')
+        self.assertTrue(launch.call_args.kwargs['start_new_session'])
+        self.assertTrue(launch.call_args.kwargs['close_fds'])
+        with self.assertRaises(FilterError):
+            self.store.run_job(job_id)
 
 
 if __name__ == '__main__': unittest.main()

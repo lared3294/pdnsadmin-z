@@ -3,6 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
+    {% include 'single_tab.html' %}
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>DNS Admin</title>
     <link rel="icon"
@@ -79,7 +80,11 @@
         .server-tabs .nav-link:hover { background: #f1f5f9; color: #334155; }
         .server-tabs .nav-link.active { background: #eff6ff; color: #1565c0; border-bottom-color: #1565c0; font-weight: 600; }
         .server-tabs .public-tab.active { background: #fff7ed; color: #c2410c; border-bottom-color: #c2410c; }
-        .table-responsive .table { min-width: 760px; background: white; }
+        .table-responsive .table { min-width: 900px; background: white; }
+        h3 { min-width: 0; overflow-wrap: anywhere; }
+        .record-editor-row .card { white-space: normal; position: sticky; left: 0; width: calc(100vw - 2rem); max-width: 100%; }
+        .record-editor-row .card-body { padding: 1rem; }
+        .record-editor-row input[name="ttl"] { max-width: 12rem; }
         .record-create summary { list-style: none; width: fit-content; }
         .record-create summary::-webkit-details-marker { display: none; }
         .record-create[open] summary { margin-bottom: 1rem; }
@@ -106,7 +111,7 @@
         let typed = (input.value || "").trim();
 
         // normalize by removing trailing dot for comparison
-        const normalize = s => s.endsWith('.') ? s.slice(0, -1) : s;
+        const normalize = s => s.replace(/\.+$/, '').toLowerCase();
         const normReal = normalize(realName);
         const normTyped = normalize(typed);
 
@@ -120,9 +125,10 @@
     }
 
     function initZoneChecks() {
-        document.querySelectorAll('input[data-zonename]').forEach((input, idx) => {
-            input.addEventListener('keyup', () => {
-                checkZoneName(input.dataset.zonename, idx + 1);
+        document.querySelectorAll('input[data-zonename]').forEach(input => {
+            const index = input.id.slice('confirm-input-'.length);
+            input.addEventListener('input', () => {
+                checkZoneName(input.dataset.zonename, index);
             });
         });
     }
@@ -135,7 +141,7 @@
         style="background-color: {% if current_server=='external' %}#c2410c{% else %}#1565c0{% endif %};">
         <div class="container-fluid header-layout">
             <div class="brand-group">
-                <a class="navbar-brand d-flex align-items-center gap-2 m-0" href="/" style="font-size: 1.4rem;">
+                <a class="navbar-brand d-flex align-items-center gap-2 m-0" href="{{ url_for('index', server=current_server) }}" style="font-size: 1.4rem;">
                     <i class="bi bi-hdd-network" aria-hidden="true"></i>DNS Admin
                 </a>
                 <span class="badge rounded-pill bg-light text-dark">
@@ -144,6 +150,7 @@
                 </span>
             </div>
             <form action="{{ url_for('search_records') }}" method="GET" role="search" class="header-search">
+                <input type="hidden" name="server" value="{{ current_server }}">
                 <div class="input-group input-group-sm">
                     <input type="search" name="q" class="form-control"
                         placeholder="Buscar en todas las zonas (* ?)" minlength="2" maxlength="100"
@@ -162,6 +169,7 @@
                     <span><i class="bi bi-person" aria-hidden="true"></i> {{ session.user }}</span>
                     {% if session.role == 'admin' %}
                     <form action="/admin_mode" method="POST">
+                        <input type="hidden" name="server" value="{{ current_server }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         {% if session.admin_mode == 'kamikaze' %}
                         <input type="hidden" name="mode" value="seguro">
@@ -176,6 +184,7 @@
                     {% endif %}
                 </div>
                 <form action="{{ url_for('logout') }}" method="POST">
+                    <input type="hidden" name="server" value="{{ current_server }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-sm btn-outline-light text-nowrap">
                         <i class="bi bi-box-arrow-right" aria-hidden="true"></i> Salir</button>
@@ -215,11 +224,11 @@
         {% if filter_view %}
         {% include "recursor_config.html" %}
         {% elif search_results is defined %}
-        <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
             <h3 class="mb-0"><i class="bi bi-search" aria-hidden="true"></i> Resultados para «{{ query }}»
                 <span class="badge bg-secondary">{{ search_results|length }}</span>
             </h3>
-            <a href="/" class="btn btn-secondary"><i class="bi bi-arrow-left" aria-hidden="true"></i> Volver al listado</a>
+            <a href="{{ url_for('index', server=current_server) }}" class="btn btn-secondary"><i class="bi bi-arrow-left" aria-hidden="true"></i> Volver al listado</a>
         </div>
         {% if search_results %}
         <div class="table-responsive"><table class="table table-striped table-hover align-middle table-card">
@@ -235,9 +244,9 @@
             <tbody>
                 {% for res in search_results %}
                 <tr>
-                    <td class="text-break"><a href="/zone/{{ res.zone_id }}">{{ res.zone }}</a></td>
+                    <td class="text-break"><a href="{{ url_for('view_zone', zone_id=res.zone_id, server=current_server) }}">{{ res.zone }}</a></td>
                     <td class="text-break">{{ res.name }}</td>
-                    <td><span class="badge badge-type-{{ res.type }}">{{ res.type }}</span></td>
+                    <td><span class="badge badge-type-{{ res.type }} {% if res.type not in allowed_record_types %}bg-secondary{% endif %}">{{ res.type }}</span></td>
                     <td>{{ res.ttl }}</td>
                     <td class="text-break">{{ res.content }}
                         {% if res.disabled %}<span class="badge bg-secondary">deshabilitado</span>{% endif %}
@@ -260,6 +269,7 @@
                     <div class="card-body">
                         <form action="/zone/add" method="POST">
                             <!-- CSRF token -->
+                            <input type="hidden" name="server" value="{{ current_server }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <div class="input-group">
                                 <input type="text" name="name" class="form-control" placeholder="ejemplo.com"
@@ -286,7 +296,7 @@
             <tbody>
                 {% for zone in zones %}
                 <tr>
-                    <td><a href="/zone/{{ zone.id }}"><i class="bi bi-folder2-open text-secondary me-1" aria-hidden="true"></i>{{ zone.name }}</a></td>
+                    <td><a href="{{ url_for('view_zone', zone_id=zone.id, server=current_server) }}"><i class="bi bi-folder2-open text-secondary me-1" aria-hidden="true"></i>{{ zone.name }}</a></td>
                     <td><span class="badge rounded-pill bg-light text-dark border">{{ zone.kind }}</span></td>
                     <td>{{ zone.serial }}</td>
                     <td>
@@ -325,6 +335,7 @@
 
                                         <form action="/zone/delete/{{ zone.id }}" method="POST">
                                             <!-- CSRF token -->
+                                            <input type="hidden" name="server" value="{{ current_server }}">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <input type="hidden" name="confirm_name"
                                                 id="hidden-confirm-{{ loop.index }}">
@@ -347,9 +358,9 @@
 
         <!-- VISTA: DETALLE DE ZONA (REGISTROS) -->
         {% else %}
-        <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
             <h3>Zona: {{ zone_detail.name }}</h3>
-            <a href="/" class="btn btn-secondary"><i class="bi bi-arrow-left" aria-hidden="true"></i> Volver al listado</a>
+            <a href="{{ url_for('index', server=current_server) }}" class="btn btn-secondary"><i class="bi bi-arrow-left" aria-hidden="true"></i> Volver al listado</a>
         </div>
 
         {% if session.role == 'admin' %}
@@ -360,9 +371,12 @@
                          Para múltiples valores, usá el "Modificar" en la tabla. -->
                 <form action="/record/add" method="POST">
                     <!-- CSRF token -->
+                    <input type="hidden" name="server" value="{{ current_server }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="zone" value="{{ zone_detail.name }}">
                     <input type="hidden" name="default_ttl" value="{{ default_ttl }}">
+                    <input type="hidden" name="disabled[]" value="false">
+                    <input type="hidden" name="operation" value="create">
                     <div class="row g-2">
                         <div class="col-md-3">
                             <input type="text" name="name" class="form-control" placeholder="Nombre (ej: www o @)"
@@ -370,11 +384,11 @@
                         </div>
                         <div class="col-md-2">
                             <select name="type" class="form-select">
-                                <option>A</option>
-                                <option>CNAME</option>
-                                <option>MX</option>
-                                <option>TXT</option>
-                                <option>NS</option>
+                                {% for record_type in allowed_record_types %}
+                                {% if record_type != 'SOA' or session.admin_mode == 'kamikaze' %}
+                                <option>{{ record_type }}</option>
+                                {% endif %}
+                                {% endfor %}
                             </select>
                         </div>
                         <div class="col-md-4">
@@ -408,24 +422,26 @@
             <tbody>
                 {% for rrset in zone_detail['rrsets'] %}
                 {% set is_pending = (rrset.name, rrset.type) in pending_keys %}
+                {% set staged = pending_by_key.get((rrset.name, rrset.type)) %}
+                {% set editing = staged if staged and staged.action == 'REPLACE' else rrset %}
                 <tr {% if is_pending %}style="background-color: #fff3cd;" {% endif %}>
-                    <td>
+                    <td class="text-break">
                         {{ rrset.name }}
                         {% if is_pending %}
                         <span class="badge bg-warning text-dark ms-1" style="font-size: 0.7em;">PENDIENTE</span>
                         {% endif %}
                     </td>
-                    <td><span class="badge badge-type-{{ rrset.type }}">{{ rrset.type }}</span></td>
+                    <td><span class="badge badge-type-{{ rrset.type }} {% if rrset.type not in allowed_record_types %}bg-secondary{% endif %}">{{ rrset.type }}</span></td>
                     <td>{{ rrset.ttl }}</td>
                     <td class="text-break">
                         <ul class="list-unstyled mb-0">
                             {% for record in rrset.records %}
-                            <li>{{ record.content }}</li>
+                            <li {% if record.disabled %}class="text-muted"{% endif %}>{{ record.content }} {% if record.disabled %}<span class="badge bg-secondary">Deshabilitado</span>{% endif %}</li>
                             {% endfor %}
                         </ul>
                     </td>
                     <td class="text-nowrap">
-                        {% if session.role == 'admin' %}
+                        {% if session.role == 'admin' and rrset.type in allowed_record_types %}
                         {% set soa_locked = (rrset.type == 'SOA' and session.get('admin_mode') != 'kamikaze') %}
 
                         <!-- MODIFICAR (edita lista completa de records del rrset) -->
@@ -446,6 +462,7 @@
                             onsubmit='return confirm("¿Borrar " + {{ rrset.type | tojson }} + " " + {{ rrset.name | tojson }} + " completo?");'
                             class="d-inline">
                             <!-- CSRF token -->
+                            <input type="hidden" name="server" value="{{ current_server }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="zone" value="{{ zone_detail.name }}">
                             <input type="hidden" name="name" value="{{ rrset.name }}">
@@ -455,12 +472,21 @@
                         </form>
                         {% endif %}
 
+                        {% else %}
+                        {% if rrset.type not in allowed_record_types %}<span class="text-muted small">Solo lectura</span>{% endif %}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% if session.role == 'admin' and rrset.type in allowed_record_types %}
+                <tr class="record-editor-row"><td colspan="5" class="p-0 border-0">
                         <!-- EDITOR COLAPSABLE -->
                         {% if not soa_locked %}
                         <div class="collapse mt-2" id="edit-{{ loop.index }}">
                             <div class="card card-body">
                                 <form action="/record/add" method="POST">
+                                    <input type="hidden" name="operation" value="edit">
                                     <!-- CSRF token -->
+                                    <input type="hidden" name="server" value="{{ current_server }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="zone" value="{{ zone_detail.name }}">
                                     <!-- Mandamos el FQDN tal cual viene -->
@@ -471,26 +497,30 @@
                                     <div class="mb-2">
                                         <label class="form-label mb-1">TTL</label>
                                         <input type="text" name="ttl" class="form-control form-control-sm"
-                                            value="{{ rrset.ttl }}" maxlength="10">
+                                            value="{{ editing.ttl }}" maxlength="10">
                                     </div>
 
                                     <label class="form-label mb-1">Valores ({{ rrset.type }})</label>
 
                                     <!-- Contenedor de inputs dinámicos -->
                                     <div id="values-{{ loop.index }}">
-                                        {% for record in rrset.records %}
+                                        {% for record in editing.records %}
                                         <div class="input-group input-group-sm mb-2 record-row">
                                             <input type="text" name="content[]" class="form-control"
                                                 value="{{ record.content }}" maxlength="1024" required>
+                                            <input type="hidden" name="disabled[]" value="{{ 'true' if record.disabled else 'false' }}">
+                                            <label class="input-group-text"><input type="checkbox" class="form-check-input mt-0 me-1" onchange="updateRecordState(this)" {% if record.disabled %}checked{% endif %}> Deshabilitado</label>
                                             <button class="btn btn-outline-danger" type="button"
                                                 onclick="removeRecordRow(this)">✕</button>
                                         </div>
                                         {% endfor %}
 
-                                        {% if not rrset.records or rrset.records|length == 0 %}
+                                        {% if not editing.records or editing.records|length == 0 %}
                                         <div class="input-group input-group-sm mb-2 record-row">
                                             <input type="text" name="content[]" class="form-control" value=""
                                                 maxlength="1024" required>
+                                            <input type="hidden" name="disabled[]" value="false">
+                                            <label class="input-group-text"><input type="checkbox" class="form-check-input mt-0 me-1" onchange="updateRecordState(this)"> Deshabilitado</label>
                                             <button class="btn btn-outline-danger" type="button"
                                                 onclick="removeRecordRow(this)">✕</button>
                                         </div>
@@ -498,10 +528,12 @@
                                     </div>
 
                                     <div class="d-flex gap-2">
+                                        {% if rrset.type not in ('SOA', 'CNAME') %}
                                         <button class="btn btn-outline-secondary btn-sm" type="button"
                                             onclick="addRecordRow('values-{{ loop.index }}')">
                                             <i class="bi bi-plus-lg" aria-hidden="true"></i> Agregar valor
                                         </button>
+                                        {% endif %}
                                         <button class="btn btn-primary btn-sm" type="submit">
                                             <i class="bi bi-check2-circle" aria-hidden="true"></i> Guardar cambios
                                         </button>
@@ -514,9 +546,10 @@
                             </div>
                         </div>
                         {% endif %}
-                        {% endif %}
-                    </td>
-                </tr>
+                </td></tr>
+                {% endif %}
+                {% else %}
+                <tr><td colspan="5" class="text-center text-muted py-4">No hay registros en esta zona.</td></tr>
                 {% endfor %}
             </tbody>
         </table></div>
@@ -529,12 +562,21 @@
         crossorigin="anonymous"></script>
 
     <script>
+        function updateRecordState(checkbox) {
+            checkbox.closest('.record-row').querySelector('input[name="disabled[]"]').value = checkbox.checked ? 'true' : 'false';
+        }
         function addRecordRow(containerId) {
             const container = document.getElementById(containerId);
+            if (container.querySelectorAll('.record-row').length >= 20) {
+                window.alert('Máximo 20 valores por registro.');
+                return;
+            }
             const div = document.createElement('div');
             div.className = 'input-group input-group-sm mb-2 record-row';
             div.innerHTML = `
                 <input type="text" name="content[]" class="form-control" value="" maxlength="1024" required>
+                <input type="hidden" name="disabled[]" value="false">
+                <label class="input-group-text"><input type="checkbox" class="form-check-input mt-0 me-1" onchange="updateRecordState(this)"> Deshabilitado</label>
                 <button class="btn btn-outline-danger" type="button" onclick="removeRecordRow(this)">✕</button>
             `;
             container.appendChild(div);
@@ -552,6 +594,8 @@
                 div.className = 'input-group input-group-sm mb-2 record-row';
                 div.innerHTML = `
                     <input type="text" name="content[]" class="form-control" value="" maxlength="1024" required>
+                <input type="hidden" name="disabled[]" value="false">
+                <label class="input-group-text"><input type="checkbox" class="form-check-input mt-0 me-1" onchange="updateRecordState(this)"> Deshabilitado</label>
                     <button class="btn btn-outline-danger" type="button" onclick="removeRecordRow(this)">✕</button>
                 `;
                 container.appendChild(div);

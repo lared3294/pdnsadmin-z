@@ -4,7 +4,7 @@ import ipaddress
 import time
 import logging
 from logging.handlers import SysLogHandler
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, abort
 from functools import wraps
 from datetime import timedelta
 import requests
@@ -19,6 +19,7 @@ from cachelib.file import FileSystemCache
 from collections import UserDict
 import uuid
 from recursor_config import FilterError, FilterStore, read_targets
+from session_lock import SESSION_SID_ENV, SessionLockMiddleware
 
 # --- configuración desde archivo/env -------------------------------------
 # para evitar tocar el script se lee un fichero INI (por defecto `config.ini`)
@@ -99,7 +100,7 @@ ALLOWED_TYPES = {'A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SOA', 'PTR', 'SRV', '
 # límites de longitud para evitar DoS o envíos abusivos
 MAX_DOMAIN_LENGTH = 255
 MAX_RECORD_CONTENT = 1024  # por ejemplo, texto de registros TXT etc.
-MAX_TTL_LENGTH = 7  # dígitos
+MAX_TTL_LENGTH = 10  # dígitos
 MAX_RECORDS_PER_RRSET = 20
 MAX_PENDING_CHANGES = 10
 
@@ -114,6 +115,8 @@ MAX_SEARCH_LENGTH = 100
 
 app = Flask(__name__, template_folder='template')
 app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024
+# Flask 3.1 otherwise limits individual form fields to 500 kB, below our 1 MiB lists.
+app.config['MAX_FORM_MEMORY_SIZE'] = app.config['MAX_CONTENT_LENGTH']
 # clave de sesión: valor explícito en config.ini ([flask] secret_key) o
 # env FLASK_SECRET_KEY, o se genera uno aleatorio cada arranque.
 #app.secret_key = cfg_get('flask', 'secret_key', 'FLASK_SECRET_KEY', '') or os.urandom(24)
@@ -152,7 +155,7 @@ class FileSystemSessionInterface(SessionInterface):
         self.cache = FileSystemCache(cache_dir, threshold=threshold, mode=mode)
 
     def _get_sid(self, app, request):
-        return request.cookies.get(app.config.get('SESSION_COOKIE_NAME', 'session'))
+        return request.environ.get(SESSION_SID_ENV) or request.cookies.get(app.config.get('SESSION_COOKIE_NAME', 'session'))
 
     def open_session(self, app, request):
         sid = self._get_sid(app, request)
@@ -192,6 +195,13 @@ class FileSystemSessionInterface(SessionInterface):
         )
 
 app.session_interface = FileSystemSessionInterface(SESSION_DIR)
+app.wsgi_app = SessionLockMiddleware(
+    app.wsgi_app,
+    # Keep locks outside FileSystemCache: its pruning must never unlink a lock.
+    os.path.realpath(SESSION_DIR) + '.locks',
+    cookie_name=app.config['SESSION_COOKIE_NAME'],
+    timeout=cfg_get('flask', 'session_lock_timeout', 'SESSION_LOCK_TIMEOUT', '5'),
+)
 
 @app.before_request
 def make_session_permanent():
@@ -234,6 +244,17 @@ def set_pdns_server(server: str):
     """Guarda la preferencia del usuario en la sesión."""
     if server in ('internal', 'external'):
         session['pdns_server'] = server
+
+def request_pdns_server():
+    """Bind a request to its explicit destination; POST must never use session fallback."""
+    values = request.form if request.method == 'POST' else request.args
+    server = values.get('server')
+    if server is None and request.method == 'GET':
+        server = get_pdns_server()
+    if server not in ('internal', 'external'):
+        abort(400, description='Servidor DNS ausente o inválido. Recarga el formulario.')
+    return server
+
 
 def get_pdns_url(server=None):
     s = server or get_pdns_server()
@@ -312,21 +333,17 @@ def is_valid_domain(name: str) -> bool:
     if len(name) > MAX_DOMAIN_LENGTH:
         return False
     #return bool(DOMAIN_RE.match(name))
+    if '..' in name:
+        return False
     if name.endswith('.'):
         name = name[:-1]  # Quitar punto final para validación
     return bool(DOMAIN_RE.match(name)) and not any(c in name for c in ['..', '.-', '-.'])
 
 
 def validate_ttl(ttl) -> bool:
-    # revisa que la longitud sea razonable antes de convertir
-    if not isinstance(ttl, str) or len(ttl) > MAX_TTL_LENGTH:
-        return False
-    try:
-        t = int(ttl)
-        # Límites razonables: 120 segundos (2min) a 604800 (7 días)
-        return 120 <= t <= 604800
-    except Exception:
-        return False
+    # RFC 2181 section 8; allow existing short TTLs and zero without rewriting them.
+    return (isinstance(ttl, str) and 0 < len(ttl) <= MAX_TTL_LENGTH
+            and ttl.isascii() and ttl.isdigit() and 0 <= int(ttl) <= 2147483647)
 
 
 def validate_soa_content(content: str) -> bool:
@@ -387,12 +404,17 @@ def validate_content(content: str, rtype: str) -> bool:
             return False
         pr, host = parts
         try:
-            if int(pr) < 0:
+            if not pr.isascii() or not pr.isdigit() or not 0 <= int(pr) <= 65535:
                 return False
         except Exception:
             return False
         # host puede terminar con punto o no, pero debe ser dominio válido
-        return is_valid_domain(host)
+        return (int(pr) == 0 if host == '.' else is_valid_domain(host))
+    if rtype == 'SRV':
+        parts = content.split()
+        return (len(parts) == 4 and all(value.isascii() and value.isdigit()
+                and 0 <= int(value) <= 65535 for value in parts[:3])
+                and (parts[3] == '.' or is_valid_domain(parts[3])))
     if rtype in ('CNAME', 'NS', 'PTR'):
         return is_valid_domain(content)
     if rtype == 'SOA':
@@ -408,8 +430,8 @@ def normalize_fqdn(name: str, zone: str) -> str:
       - FQDN: 'www.example.com.' o 'www.example.com'
     Devuelve siempre FQDN con punto final y consistente con zone.
     """
-    name = (name or "").strip()
-    zone = (zone or "").strip()
+    name = (name or "").strip().lower()
+    zone = (zone or "").strip().lower()
 
     # Asegurar que zone sea FQDN con punto final
     if not zone.endswith("."):
@@ -426,6 +448,9 @@ def normalize_fqdn(name: str, zone: str) -> str:
     # Si ya es FQDN dentro de la zona, devolverlo con punto final
     if name_nodot == zone_nodot or name_nodot.endswith("." + zone_nodot):
         return name_nodot + "."
+
+    if name.endswith("."):
+        raise ValueError("El nombre absoluto del registro está fuera de la zona.")
 
     # Si no, tratarlo como relativo y concatenar
     return f"{name_nodot}.{zone}"
@@ -462,7 +487,8 @@ def normalize_target_fqdn(target: str, zone: str) -> str:
 
 def extract_preferred_ttl(zone_data: dict) -> int:
     """Calcula el TTL más común en memoria a partir del payload JSON de una zona descargada."""
-    default = zone_data.get('default_ttl') or zone_data.get('ttl') or 300
+    default = next((zone_data[key] for key in ('default_ttl', 'ttl')
+                    if isinstance(zone_data.get(key), int) and 0 <= zone_data[key] <= 2147483647), 300)
     if 'rrsets' in zone_data:
         from collections import Counter
         ttl_counts = Counter()
@@ -479,22 +505,25 @@ def extract_preferred_ttl(zone_data: dict) -> int:
 
 
 
-def fetch_rrset(zone: str, fqdn: str, rtype: str):
+def fetch_rrset(zone: str, fqdn: str, rtype: str, server: str, strict=False):
     """Devuelve el rrset completo de un registro específico.
 
     Retorna el objeto JSON del rrset (con "records", "ttl", etc.) o None si
     no se encuentra o hay error.
     """
     try:
-        r = requests.get(f"{get_pdns_url()}/zones/{zone}", headers=get_pdns_headers(), timeout=5)
+        r = requests.get(f"{get_pdns_url(server)}/zones/{zone}", headers=get_pdns_headers(server), timeout=5)
         if r.status_code == 200:
             data = r.json()
             for rr in data.get('rrsets', []):
                 # comparar nombre y tipo tal como devuelve PowerDNS (FQDN con punto)
                 if rr.get('name') == fqdn and rr.get('type') == rtype:
                     return rr
-    except Exception:
-        pass
+        elif strict:
+            raise ValueError('No se pudo comprobar el estado actual de la zona.')
+    except Exception as error:
+        if strict:
+            raise ValueError('No se pudo comprobar el estado actual de la zona. Reintenta antes de guardar.') from error
     return None
 
 
@@ -524,9 +553,12 @@ import secrets
 
 def handle_api_error(r):
     try:
-        return r.json().get('error', r.text)
-    except json.JSONDecodeError:
-        return r.text
+        data = r.json()
+        if isinstance(data, dict) and data.get('error') is not None:
+            return str(data['error'])[:2000]
+    except (ValueError, TypeError):
+        pass
+    return str(r.text)[:2000] or f'HTTP {r.status_code}'
 
 
 def rotate_session_id():
@@ -564,6 +596,7 @@ def csrf_protect():
 
 # hace disponible la función en los templates como csrf_token()
 app.jinja_env.globals['csrf_token'] = generate_csrf_token
+app.jinja_env.globals['allowed_record_types'] = sorted(ALLOWED_TYPES)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -663,6 +696,8 @@ def logout():
 @app.route('/admin_mode', methods=['POST'])
 @admin_required
 def set_admin_mode():
+    server = request_pdns_server()
+    set_pdns_server(server)
     mode = request.form.get('mode', 'seguro')
     if mode in ('seguro', 'kamikaze'):
         session['admin_mode'] = mode
@@ -670,17 +705,15 @@ def set_admin_mode():
             flash('Aviso: Estás en Modo Kamikaze. Tienes habilitada la creación y borrado de zonas.', 'warning')
         else:
             flash('Modo Seguro activado.', 'success')
-    return redirect(url_for('index'))
+    return redirect(url_for('index', server=server))
 
 
 @app.route('/')
 @login_required
 def index():
     # cambiar servidor si se indica en la query string
-    server = request.args.get('server')
-    if server:
-        set_pdns_server(server)
-    current = get_pdns_server()
+    current = request_pdns_server()
+    set_pdns_server(current)
 
     # Listar zonas
     try:
@@ -713,19 +746,21 @@ def search_records():
     Delega la búsqueda al servidor DNS, que la hace sobre todas las zonas a la
     vez. La API admite los comodines '*' (varios caracteres) y '?' (un carácter).
     """
+    server = request_pdns_server()
+    set_pdns_server(server)
     query = (request.args.get('q') or '').strip()
     user = session.get('user')
-    current = get_pdns_server()
+    current = server
 
     if not (MIN_SEARCH_LENGTH <= len(query) <= MAX_SEARCH_LENGTH):
         flash(f'El término de búsqueda debe tener entre {MIN_SEARCH_LENGTH} y {MAX_SEARCH_LENGTH} caracteres.', 'warning')
-        return redirect(url_for('index'))
+        return redirect(url_for('index', server=server))
 
     results = []
     try:
         r = requests.get(
-            f"{get_pdns_url()}/search-data",
-            headers=get_pdns_headers(),
+            f"{get_pdns_url(server)}/search-data",
+            headers=get_pdns_headers(server),
             params={'q': query, 'max': SEARCH_MAX, 'object_type': 'record'},
             timeout=5
         )
@@ -766,17 +801,18 @@ def search_records():
 @app.route('/zone/add', methods=['POST'])
 @admin_required
 def add_zone():
+    server = request_pdns_server()
     if session.get('admin_mode') != 'kamikaze':
         flash('Debes estar en Modo Kamikaze para crear zonas', 'danger')
-        return redirect(url_for('index'))
+        return redirect(url_for('index', server=server))
 
     name = request.form['name']
     user = session.get('user')
-    current = get_pdns_server()
+    current = server
     # validación básica antes de enviar a PowerDNS
-    if not is_valid_domain(name):
+    if name == '@' or not is_valid_domain(name):
         flash('Nombre de zona inválido o demasiado largo', 'danger')
-        return redirect(url_for('index'))
+        return redirect(url_for('index', server=server))
 
     # PowerDNS requiere el punto final (FQDN) para algunas versiones,
     # pero la API suele manejarlo. Enviamos el nombre tal cual o normalizado.
@@ -790,11 +826,11 @@ def add_zone():
     }
 
     try:
-        r = requests.post(f"{get_pdns_url()}/zones", headers=get_pdns_headers(), json=payload, timeout=5)
+        r = requests.post(f"{get_pdns_url(server)}/zones", headers=get_pdns_headers(server), json=payload, timeout=5)
         if r.status_code in [201, 204]:
             flash('Zona creada exitosamente', 'success')
             log_event(user, 'add_zone', zone=name)
-            return redirect(url_for('view_zone', zone_id=name))
+            return redirect(url_for('view_zone', zone_id=name, server=server))
         else:
             err = handle_api_error(r)
             flash(f'Error al crear zona: {err}', 'danger')
@@ -806,32 +842,36 @@ def add_zone():
         log_event(user, 'add_zone', zone=name, level=logging.ERROR, details=str(e))
         flash('Error inesperado al crear la zona.', 'danger')
 
-    return redirect(url_for('index'))
+    return redirect(url_for('index', server=server))
 
 @app.route('/zone/delete/<zone_id>', methods=['POST'])
 @admin_required
 def delete_zone(zone_id):
+    server = request_pdns_server()
     if session.get('admin_mode') != 'kamikaze':
         flash('Debes estar en Modo Kamikaze para eliminar zonas', 'danger')
-        return redirect(url_for('index'))
+        return redirect(url_for('index', server=server))
 
     user = session.get('user')
     # asegurarse de que la id recibida es razonablemente válida
     if not is_valid_domain(zone_id):
         flash('Zona inválida', 'danger')
-        return redirect(url_for('index'))
+        return redirect(url_for('index', server=server))
 
     confirm_name = request.form.get("confirm_name")
 
     # comparar sin importar punto final
-    if (confirm_name or "").rstrip('.') != zone_id.rstrip('.'):
+    if (confirm_name or "").strip().rstrip('.').lower() != zone_id.rstrip('.').lower():
         flash("Confirmación incorrecta. La zona no fue eliminada.", "danger")
-        return redirect(url_for("index"))
+        return redirect(url_for('index', server=server))
 
     # zone_id usualmente es el canonical name (ej: example.com.)
     try:
-        r = requests.delete(f"{get_pdns_url()}/zones/{zone_id}", headers=get_pdns_headers(), timeout=5)
+        r = requests.delete(f"{get_pdns_url(server)}/zones/{zone_id}", headers=get_pdns_headers(server), timeout=5)
         if r.status_code in [200, 204]:
+            session['pending_changes'] = [c for c in session.get('pending_changes', [])
+                if not (c.get('server') == server
+                        and c['zone'].rstrip('.').lower() == zone_id.rstrip('.').lower())]
             flash('Zona eliminada', 'success')
             log_event(user, 'delete_zone', zone=zone_id)
         else:
@@ -844,18 +884,20 @@ def delete_zone(zone_id):
         log_event(user, 'delete_zone', zone=zone_id, level=logging.ERROR, details=str(e))
         flash('Error inesperado al eliminar la zona.', 'danger')
 
-    return redirect(url_for('index'))
+    return redirect(url_for('index', server=server))
 
 @app.route('/zone/<zone_id>', methods=['GET'])
 @login_required
 def view_zone(zone_id):
+    server = request_pdns_server()
+    set_pdns_server(server)
     # Validar zone_id antes de enviarlo a la API
     if not is_valid_domain(zone_id):
         flash('Zona inválida.', 'danger')
-        return redirect(url_for('index'))
+        return redirect(url_for('index', server=server))
     user = session.get('user')
     try:
-        r = requests.get(f"{get_pdns_url()}/zones/{zone_id}", headers=get_pdns_headers(), timeout=5)
+        r = requests.get(f"{get_pdns_url(server)}/zones/{zone_id}", headers=get_pdns_headers(server), timeout=5)
         if r.status_code == 200:
             zone_data = r.json()
 
@@ -873,13 +915,16 @@ def view_zone(zone_id):
             default_ttl = extract_preferred_ttl(zone_data)
 
             # Calcular qué registros (name, type) tienen cambios pendientes para el servidor actual
-            current = get_pdns_server()
+            current = server
             pending_keys = set(
                 (c['name'], c['type']) for c in session.get('pending_changes', [])
                 if c['zone'] == zone_id and c.get('server', 'internal') == current
             )
 
-            return render_template('dashboard.html', zone_detail=zone_data, zones=[], default_ttl=default_ttl, current_server=current, pending_keys=pending_keys)
+            return render_template('dashboard.html', zone_detail=zone_data, zones=[], default_ttl=default_ttl,
+                                   current_server=current, pending_keys=pending_keys,
+                                   pending_by_key={(c['name'], c['type']): c for c in session.get('pending_changes', [])
+                                       if c['zone'].rstrip('.').lower() == zone_id.rstrip('.').lower() and c.get('server') == current})
         else:
             flash(f'No se pudo cargar la zona: {handle_api_error(r)}', 'danger')
     except requests.exceptions.Timeout as e:
@@ -887,11 +932,12 @@ def view_zone(zone_id):
     except Exception as e:
         flash(f'Excepción: {e}', 'danger')
 
-    return redirect(url_for('index'))
+    return redirect(url_for('index', server=server))
 
 @app.route('/record/add', methods=['POST'])
 @admin_required
 def add_record():
+    server = request_pdns_server()
     zone = request.form['zone']
     name = request.form['name']
     rtype = request.form['type']
@@ -899,17 +945,19 @@ def add_record():
     user = session.get('user')
 
     # validación básica de zona (primero, para evitar llamadas a la API con basura)
-    if not is_valid_domain(zone):
+    if zone == '@' or not is_valid_domain(zone):
         flash('Zona inválida o demasiado larga', 'danger')
-        return redirect(url_for('index'))
+        return redirect(url_for('index', server=server))
+
+    zone = zone.rstrip('.').lower() + '.'
 
     # limit name length
     if len(name) > MAX_DOMAIN_LENGTH:
         flash('Nombre de registro demasiado largo', 'danger')
-        return redirect(url_for('view_zone', zone_id=zone))
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
     if not is_valid_domain(name):
         flash('Nombre de registro inválido', 'danger')
-        return redirect(url_for('view_zone', zone_id=zone))
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
 
     # si el usuario dejó el TTL vacío, calcular el valor más común de la zona
     if not ttl:
@@ -919,13 +967,13 @@ def add_record():
     # validaciones básicas
     if rtype not in ALLOWED_TYPES:
         flash('Tipo de registro no permitido', 'danger')
-        return redirect(url_for('view_zone', zone_id=zone))
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
     if rtype == 'SOA' and session.get('admin_mode') != 'kamikaze':
         flash('Para modificar SOA debes activar Modo Kamikaze', 'danger')
-        return redirect(url_for('view_zone', zone_id=zone))
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
     if not validate_ttl(ttl):
-        flash('TTL inválido', 'danger')
-        return redirect(url_for('view_zone', zone_id=zone))
+        flash('TTL inválido: usa un entero entre 0 y 2147483647 segundos.', 'danger')
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
 
     # 1) Soportar múltiples valores:
     contents = request.form.getlist('content[]')
@@ -934,64 +982,97 @@ def add_record():
         single = request.form.get('content', '').strip()
         contents = [single] if single else []
 
-    # limpiar vacíos
-    contents = [c.strip() for c in contents if c and c.strip()]
+    disabled_values = request.form.getlist('disabled[]')
+    if request.form.getlist('content[]') and not disabled_values:
+        flash('Formulario desactualizado. Recarga para conservar el estado de los registros.', 'danger')
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
+    if disabled_values and (len(disabled_values) != len(contents)
+                            or any(value not in ('true', 'false') for value in disabled_values)):
+        flash('Estado de los registros inválido. Recarga el formulario.', 'danger')
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
+    pairs = [(content.strip(), disabled_values[index] == 'true' if disabled_values else False)
+             for index, content in enumerate(contents) if content and content.strip()]
+    contents = [content for content, _ in pairs]
+    disabled_flags = [disabled for _, disabled in pairs]
     if not contents:
         flash('El campo contenido es obligatorio', 'danger')
-        return redirect(url_for('view_zone', zone_id=zone))
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
 
     if len(contents) > MAX_RECORDS_PER_RRSET:
         flash(f'Máximo {MAX_RECORDS_PER_RRSET} valores por registro', 'danger')
-        return redirect(url_for('view_zone', zone_id=zone))
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
 
-    if rtype == 'SOA' and len(contents) != 1:
-        flash('SOA debe tener exactamente un valor', 'danger')
-        return redirect(url_for('view_zone', zone_id=zone))
+    if rtype in ('SOA', 'CNAME') and len(contents) != 1:
+        flash(f'{rtype} debe tener exactamente un valor', 'danger')
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
 
     normalized_contents = []
     # validar cada valor según el tipo y longitud
     for c in contents:
         if len(c) > MAX_RECORD_CONTENT:
             flash(f'Contenido demasiado largo para tipo {rtype}', 'danger')
-            return redirect(url_for('view_zone', zone_id=zone))
+            return redirect(url_for('view_zone', zone_id=zone, server=server))
         if not validate_content(c, rtype):
             msg = f'Contenido "{c}" inválido para tipo {rtype}'
             if rtype == 'MX':
                 msg += ' (debe ser "prioridad servidor.example.com.")'
             flash(msg, 'danger')
-            return redirect(url_for('view_zone', zone_id=zone))
+            return redirect(url_for('view_zone', zone_id=zone, server=server))
 
         # Normalizar a FQDN los tipos que lo requieren, usando logica de TARGET
         if rtype in ('CNAME', 'NS', 'PTR'):
             c = normalize_target_fqdn(c, zone)
         elif rtype == 'MX':
             parts = c.split()
-            c = f"{parts[0]} {normalize_target_fqdn(parts[1], zone)}"
+            c = f"{int(parts[0])} {normalize_target_fqdn(parts[1], zone)}"
+        elif rtype == 'SRV':
+            parts = c.split()
+            c = ' '.join([str(int(value)) for value in parts[:3]] + [normalize_target_fqdn(parts[3], zone)])
 
         normalized_contents.append(c)
 
     contents = normalized_contents
-    fqdn = normalize_fqdn(name, zone)
+    try:
+        fqdn = normalize_fqdn(name, zone)
+    except ValueError as error:
+        flash(str(error), 'danger')
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
+    if len(fqdn.rstrip('.')) > 253:
+        flash('El nombre completo del registro es demasiado largo.', 'danger')
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
     zone_fqdn = normalize_fqdn('@', zone)
     if rtype == 'SOA' and fqdn != zone_fqdn:
         flash('El registro SOA solo puede existir en el apex de la zona', 'danger')
-        return redirect(url_for('view_zone', zone_id=zone))
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
 
     # REVISAR LÍMITE
-    if len(session.get('pending_changes', [])) >= MAX_PENDING_CHANGES:
+    if len(session.get('pending_changes', [])) >= MAX_PENDING_CHANGES and not any(
+            c.get('server') == server and c['zone'].rstrip('.').lower() == zone.rstrip('.')
+            and c['name'].lower() == fqdn and c['type'] == rtype
+            for c in session.get('pending_changes', [])):
         flash(f'Límite de {MAX_PENDING_CHANGES} cambios pendientes alcanzado. Aplica o descarta los actuales.', 'warning')
-        return redirect(url_for('view_zone', zone_id=zone))
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
+
+    creating = request.form.get('operation') == 'create'
+    try:
+        current_rr = fetch_rrset(zone, fqdn, rtype, server, strict=creating)
+    except ValueError as error:
+        flash(str(error), 'danger')
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
+    if creating and current_rr is not None:
+        flash('El registro ya existe. Usa Modificar para conservar o editar todos sus valores.', 'warning')
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
 
     # EN LUGAR DE HACER EL PATCH, GUARDAMOS EN SESIÓN
     change = {
         'id': str(uuid.uuid4()),
         'action': 'REPLACE',
-        'server': get_pdns_server(),
+        'server': server,
         'zone': zone,
         'name': fqdn,
         'type': rtype,
         'ttl': int(ttl),
-        'records': [{"content": c, "disabled": False} for c in contents],
+        'records': [{"content": c, "disabled": disabled} for c, disabled in zip(contents, disabled_flags)],
         'readable_records': ', '.join(contents),
         'timestamp': time.time()
     }
@@ -1000,9 +1081,9 @@ def add_record():
 
     # Prevenir duplicados/conflictos: si ya hay un cambio para este registro, lo reemplazamos
     pending = [c for c in pending if not (
-        c.get('server', get_pdns_server()) == change['server'] and
-        c['zone'] == zone and
-        c['name'] == fqdn and
+        c.get('server') == change['server'] and
+        c['zone'].rstrip('.').lower() == zone.rstrip('.') and
+        c['name'].lower() == fqdn and
         c['type'] == rtype
     )]
 
@@ -1010,54 +1091,66 @@ def add_record():
     session['pending_changes'] = pending
 
     flash(f'Cambio para {fqdn} ({rtype}) añadido a la lista de espera.', 'info')
-    current_rr = fetch_rrset(zone, fqdn, rtype)
     details = build_rrset_change_details(current_rr, new_contents=contents, new_ttl=int(ttl), action='REPLACE')
     action_name = 'stage_update_soa' if rtype == 'SOA' else 'stage_replace_record'
     log_event(user, action_name, zone=zone, record=f"{fqdn} {rtype}", details=details)
 
-    return redirect(url_for('view_zone', zone_id=zone))
+    return redirect(url_for('view_zone', zone_id=zone, server=server))
 
 
 @app.route('/record/delete', methods=['POST'])
 @admin_required
 def delete_record():
+    server = request_pdns_server()
     zone = request.form['zone']       # ej: "example.com."
     name = request.form['name']       # ej: "www" o "@"
     rtype = request.form['type']      # ej: "A"
     user = session.get('user')
 
     # validar
-    if not is_valid_domain(zone):
+    if zone == '@' or not is_valid_domain(zone):
         flash('Zona inválida', 'danger')
-        return redirect(url_for('index'))
+        return redirect(url_for('index', server=server))
+    zone = zone.rstrip('.').lower() + '.'
+
     if rtype not in ALLOWED_TYPES:
         flash('Tipo de registro no permitido', 'danger')
-        return redirect(url_for('view_zone', zone_id=zone))
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
     if rtype == 'SOA':
         flash('No está permitido borrar el registro SOA', 'danger')
-        return redirect(url_for('view_zone', zone_id=zone))
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
     if not is_valid_domain(name):
         flash('Nombre de registro inválido', 'danger')
-        return redirect(url_for('view_zone', zone_id=zone))
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
 
 
-    fqdn = normalize_fqdn(name, zone)
+    try:
+        fqdn = normalize_fqdn(name, zone)
+    except ValueError as error:
+        flash(str(error), 'danger')
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
+    if len(fqdn.rstrip('.')) > 253:
+        flash('El nombre completo del registro es demasiado largo.', 'danger')
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
 
     # REVISAR LÍMITE
-    if len(session.get('pending_changes', [])) >= MAX_PENDING_CHANGES:
+    if len(session.get('pending_changes', [])) >= MAX_PENDING_CHANGES and not any(
+            c.get('server') == server and c['zone'].rstrip('.').lower() == zone.rstrip('.')
+            and c['name'].lower() == fqdn and c['type'] == rtype
+            for c in session.get('pending_changes', [])):
         flash(f'Límite de {MAX_PENDING_CHANGES} cambios pendientes alcanzado.', 'warning')
-        return redirect(url_for('view_zone', zone_id=zone))
+        return redirect(url_for('view_zone', zone_id=zone, server=server))
 
     # Obtener valores actuales para mostrar en el resumen y para auditoría
     readable_vals = ""
-    rr = fetch_rrset(zone, fqdn, rtype)
+    rr = fetch_rrset(zone, fqdn, rtype, server)
     if rr and 'records' in rr:
         readable_vals = ', '.join([rec.get('content', '') for rec in rr['records']])
 
     change = {
         'id': str(uuid.uuid4()),
         'action': 'DELETE',
-        'server': get_pdns_server(),
+        'server': server,
         'zone': zone,
         'name': fqdn,
         'type': rtype,
@@ -1069,9 +1162,9 @@ def delete_record():
 
     # Prevenir duplicados/conflictos: si ya hay un cambio para este registro, lo reemplazamos
     pending = [c for c in pending if not (
-        c.get('server', get_pdns_server()) == change['server'] and
-        c['zone'] == zone and
-        c['name'] == fqdn and
+        c.get('server') == change['server'] and
+        c['zone'].rstrip('.').lower() == zone.rstrip('.') and
+        c['name'].lower() == fqdn and
         c['type'] == rtype
     )]
 
@@ -1082,14 +1175,14 @@ def delete_record():
     details = build_rrset_change_details(rr, action='DELETE')
     log_event(user, 'stage_delete_record', zone=zone, record=f"{fqdn} {rtype}", details=details)
 
-    return redirect(url_for('view_zone', zone_id=zone))
+    return redirect(url_for('view_zone', zone_id=zone, server=server))
 
 
 @app.route('/review')
 @login_required
 def review_changes():
     pending = session.get('pending_changes', [])
-    return render_template('review.html', changes=pending)
+    return render_template('review.html', changes=pending, current_server=get_pdns_server())
 
 
 @app.route('/change/remove/<change_id>', methods=['POST'])
@@ -1121,7 +1214,13 @@ def commit_changes():
     # Agrupar por servidor y zona: almacenamos (rrsets, ids)
     by_server_zone = {}
     for c in pending:
-        s = c.get('server', get_pdns_server()) # Fallback para pendientes viejos
+        s = c.get('server')
+        if c.get('type') == 'SOA' and session.get('admin_mode') != 'kamikaze':
+            flash('Para aplicar cambios SOA debes activar Modo Kamikaze.', 'danger')
+            return redirect(url_for('review_changes'))
+        if s not in ('internal', 'external'):
+            flash('Hay cambios sin servidor válido. Descártalos y vuelve a crearlos.', 'danger')
+            return redirect(url_for('review_changes'))
         z = c['zone']
 
         key = (s, z)
@@ -1184,7 +1283,10 @@ def commit_changes():
 
 
 # Recursive filter policies are independent from the authoritative PowerDNS API.
-filter_store = FilterStore(cfg_get('filters', 'state_dir', 'PDNSADMIN_FILTERS_DIR', '/tmp/pdnsadmin-filters'))
+filter_store = FilterStore(
+    cfg_get('recursor', 'state_dir', 'PDNSADMIN_FILTERS_DIR', '/tmp/pdnsadmin-filters'),
+    cfg_get('recursor', 'steven_url', 'PDNSADMIN_STEVEN_URL', '')
+)
 
 
 @app.route('/filters', methods=['GET', 'POST'])
@@ -1220,9 +1322,12 @@ def filters():
             log_event(session['user'], 'filters_lists_saved')
             flash('Listas guardadas. Todavía no se aplicaron a los recursivos.', 'success')
             return redirect(url_for('filters'))
-        job = filter_store.latest_job()
     except (FilterError, OSError, ValueError) as error:
         flash(f'Filtros: {error}', 'danger')
+    try:
+        job = filter_store.latest_job()
+    except (FilterError, OSError, ValueError) as error:
+        flash(f'Estado del despliegue: {error}', 'danger')
     return render_template('dashboard.html', filter_view=True, current_server='internal',
                            filter_state=state or {'steven_enabled': False, 'blacklist': '', 'whitelist': ''},
                            filter_targets=targets, filter_config_error=config_error, filter_job=job)

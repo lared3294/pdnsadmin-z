@@ -3,6 +3,8 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    {% include 'single_tab.html' %}
     <title>Revisar Cambios - DNS Admin</title>
     <link rel="icon"
         href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%231565c0'%3E%3Cpath d='M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0M5.78 8.75a9.64 9.64 0 0 0 1.363 4.177c.255.426.542.832.857 1.215.245-.296.551-.705.857-1.215A9.64 9.64 0 0 0 10.22 8.75Zm4.44-1.5a9.64 9.64 0 0 0-1.363-4.177c-.307-.51-.612-.919-.857-1.215a9.927 9.927 0 0 0-.857 1.215A9.64 9.64 0 0 0 5.78 7.25Zm-5.944 1.5H1.543a6.507 6.507 0 0 0 4.666 5.5c-.123-.181-.24-.365-.352-.552-.715-1.192-1.437-2.874-1.581-4.948Zm-2.733-1.5h2.733c.144-2.074.866-3.756 1.58-4.948.12-.197.237-.381.353-.552a6.507 6.507 0 0 0-4.666 5.5Zm10.181 1.5c-.144 2.074-.866 3.756-1.58 4.948-.12.197-.237.381-.353.552a6.507 6.507 0 0 0 4.666-5.5Zm2.733-1.5a6.507 6.507 0 0 0-4.666-5.5c.116.171.234.355.353.552.714 1.192 1.436 2.874 1.58 4.948Z'/%3E%3C/svg%3E">
@@ -69,8 +71,8 @@
     <nav class="navbar navbar-dark bg-dark sticky-top shadow-sm mb-4">
         <div class="container-fluid">
             <span class="navbar-brand">DNS Admin - Revisión de Cambios</span>
-            <div class="d-flex">
-                <a href="{{ url_for('index') }}" class="btn btn-outline-light me-2"><i class="bi bi-arrow-left" aria-hidden="true"></i> Volver al Panel</a>
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+                <a href="{{ url_for('index', server=current_server) }}" class="btn btn-outline-light me-2"><i class="bi bi-arrow-left" aria-hidden="true"></i> Volver al Panel</a>
                 <span class="navbar-text me-3">Usuario: {{ session.user }}</span>
                 <form action="{{ url_for('logout') }}" method="POST" class="d-inline">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -82,14 +84,16 @@
 
     <div class="container">
         <div class="card shadow">
-            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+            <div class="card-header bg-primary text-white d-flex flex-wrap gap-2 justify-content-between align-items-center">
                 <h4 class="mb-0">Lista de Cambios en Espera</h4>
                 <div>
+                    {% if changes and session.role == 'admin' %}
                     <form action="{{ url_for('discard_all') }}" method="POST" class="d-inline"
                         onsubmit="return confirm('¿Seguro que quieres descartar TODOS los cambios pendientes?');">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-warning btn-sm"><i class="bi bi-trash" aria-hidden="true"></i> Descartar Todo</button>
                     </form>
+                    {% endif %}
                 </div>
             </div>
             <div class="card-body">
@@ -101,13 +105,14 @@
                 {% endif %}
                 {% endwith %}
 
+                {% if changes %}
                 <div class="alert alert-info">
                     Estos cambios <strong>no se han aplicado todavía</strong> a PowerDNS. Presiona "Confirmar y Aplicar"
                     al final de la página para ejecutarlos.
                 </div>
 
                 <div class="table-responsive">
-                    <table class="table table-hover align-middle">
+                    <table class="table table-hover align-middle" style="min-width: 850px;">
                         <thead class="table-light">
                             <tr>
                                 <th>Acción</th>
@@ -121,11 +126,6 @@
                             </tr>
                         </thead>
                         <tbody>
-                            {% if not changes %}
-                            <tr>
-                                <td colspan="7" class="text-center py-4 text-muted">No hay cambios pendientes.</td>
-                            </tr>
-                            {% else %}
                             {% for c in changes %}
                             <tr>
                                 <td>
@@ -137,34 +137,45 @@
                                 </td>
                                 <td>
                                     <span class="badge border border-secondary text-secondary">
-                                        {% if c.server|default('internal') == 'external' %}DNS público{% else %}DNS privado{% endif %}
+                                        {% if c.server == 'external' %}DNS público{% elif c.server == 'internal' %}DNS privado{% else %}Servidor inválido{% endif %}
                                     </span>
                                 </td>
-                                <td><small>{{ c.zone }}</small></td>
+                                <td><small>{% if c.server in ('internal', 'external') %}<a href="{{ url_for('view_zone', zone_id=c.zone, server=c.server) }}">{{ c.zone }}</a>{% else %}{{ c.zone }}{% endif %}</small></td>
                                 <td><code>{{ c.name }}</code></td>
                                 <td><span class="badge badge-type-{{ c.type }}">{{ c.type }}</span></td>
-                                <td>{{ c.ttl if c.ttl else '-' }}</td>
+                                <td>{{ c.ttl if c.ttl is defined else '-' }}</td>
                                 <td>
-                                    <div class="text-truncate" style="max-width: 300px;">
-                                        {{ c.readable_records }}
+                                    <div style="max-width: 300px; min-width: 180px;">
+                                        {% if c.action == 'REPLACE' %}
+                                        {% for record in c.records %}
+                                        <div class="d-flex flex-wrap gap-1 align-items-center mb-1">
+                                            <span class="text-break">{{ record.content }}</span>
+                                            {% if record.disabled %}<span class="badge bg-secondary">Deshabilitado</span>{% endif %}
+                                        </div>
+                                        {% endfor %}
+                                        {% else %}<span class="text-break">{{ c.readable_records }}</span>{% endif %}
                                     </div>
                                 </td>
                                 <td class="text-end">
+                                    {% if session.role == 'admin' %}
                                     <form action="{{ url_for('remove_change', change_id=c.id) }}" method="POST"
                                         class="d-inline">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                         <button type="submit" class="btn btn-outline-danger btn-sm"
                                             title="Quitar este cambio">&times;</button>
                                     </form>
+                                    {% endif %}
                                 </td>
                             </tr>
                             {% endfor %}
-                            {% endif %}
                         </tbody>
                     </table>
                 </div>
+                {% else %}
+                <div class="alert alert-light border text-center mb-0">No hay cambios pendientes.</div>
+                {% endif %}
 
-                {% if changes %}
+                {% if changes and session.role == 'admin' %}
                 <div class="mt-4 border-top pt-3 d-flex justify-content-end">
                     <form action="{{ url_for('commit_changes') }}" method="POST"
                         onsubmit="return confirm('¿Confirmas que deseas aplicar todos estos cambios a los servidores DNS ahora?');">

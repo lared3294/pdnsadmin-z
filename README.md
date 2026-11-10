@@ -8,7 +8,7 @@ Los cambios de registros se guardan en una lista de pendientes: puedes revisarlo
 
 ## Configuración de recursivos privados
 
-En **DNS privado**, las subpestañas **Dominios** y **Configuración de recursivos** separan la administración autoritativa de las políticas de los recursivos. Filtros permite seleccionar StevenBlacklist (variante gambling-porn), editar listas negra y blanca y generar un archivo hosts y distribuirlo a cuatro PowerDNS Recursor mediante un script del sistema que copia por SCP y reinicia los servicios. También permite editar y aplicar `/etc/powerdns/forward-zones`, con un botón independiente. La aplicación no maneja credenciales SSH y muestra resultados individuales.
+En **DNS privado**, las subpestañas **Dominios** y **Configuración de recursivos** separan la administración autoritativa de las políticas de los recursivos. Filtros permite seleccionar StevenBlacklist (URL configurable en `[recursor] steven_url`, con gambling-porn en el ejemplo), editar listas negra y blanca y generar un archivo hosts y distribuirlo a cuatro PowerDNS Recursor mediante un script del sistema que prepara el archivo por SSH, valida la configuración, lo reemplaza de forma atómica y comprueba el reinicio. Ante un fallo restaura el archivo anterior e intenta recuperar el servicio; la distribución se detiene en ese destino. También permite editar y aplicar `/etc/powerdns/forward-zones`, con un botón independiente. La aplicación no maneja credenciales SSH y muestra resultados individuales.
 
 Consulta la [guía de configuración y despliegue de filtros](docs/recursive-filters.md) para preparar los recursivos y sus permisos. La lista blanca tiene prioridad y utiliza nombres exactos. Esta funcionalidad se desarrolla en la rama `recursor_control`.
 
@@ -46,7 +46,7 @@ Las capturas se generaron a partir de las plantillas reales del proyecto con un 
 - Usuarios administradores o de consulta, según los grupos recibidos por OIDC.
 - Sesiones almacenadas en el servidor, protección CSRF y registro de eventos en syslog.
 
-El backend admite `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `SOA`, `PTR`, `SRV` y `CAA`. El formulario de alta ofrece `A`, `CNAME`, `MX`, `TXT` y `NS`; los demás tipos existentes pueden consultarse y editarse desde la tabla, con las restricciones del SOA descritas más abajo.
+El backend admite `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `SOA`, `PTR`, `SRV` y `CAA`. El formulario de alta ofrece esos mismos tipos; `SOA` requiere Modo Kamikaze. Los tipos restantes que devuelva PowerDNS se muestran como solo lectura.
 
 ## Requisitos
 
@@ -221,6 +221,10 @@ session_file_dir = /tmp/flask_sessions
 ```
 
 Mantén la clave entre reinicios y compártela entre los workers. El directorio de sesiones debe ser escribible por el usuario que ejecuta Gunicorn y compartido entre sus workers. La duración configurada de las sesiones es de una hora; los cambios pendientes pertenecen a la sesión del usuario.
+
+Las peticiones que comparten sesión se procesan bajo un bloqueo `flock`, desde antes de leer la sesión hasta después de guardarla. Esto coordina los workers de Gunicorn de un mismo servidor y evita que una consulta concurrente vuelva a guardar cambios ya aplicados. La espera máxima es de 5 segundos; puedes ajustarla con `[flask] session_lock_timeout` o `SESSION_LOCK_TIMEOUT` (mayor que 0 y hasta 60 segundos). Si se agota, se devuelve HTTP 503 con `Retry-After: 1`, sin ejecutar la operación ni cambiar la cookie. No se reenvían operaciones automáticamente.
+
+Los bloqueos se guardan en un directorio privado hermano del directorio de sesiones, con sufijo `.locks`, que debe poder crear el usuario del servicio. Se usan hasta 4096 archivos estables para limitar el uso de disco; sesiones distintas pueden compartir ocasionalmente un bloqueo. No borres estos archivos mientras el servicio esté ejecutándose. Los bloqueos se liberan al terminar la petición, ante excepciones o al morir el worker. Esta coordinación supone un único servidor de aplicación y un sistema de archivos local compatible con `flock`.
 
 ### 4. Configurar Keycloak / OIDC
 
@@ -405,7 +409,7 @@ Las consultas de búsqueda tienen entre 2 y 100 caracteres y muestran hasta `sea
 ### Crear, modificar o borrar registros
 
 1. Como administrador, abre una zona y pulsa **Añadir registro** para desplegar el formulario. Introduce el nombre relativo (`www`) o `@` para la raíz de la zona, tipo, contenido y TTL en segundos.
-2. Pulsa **Guardar**, o **Modificar** sobre un RRset existente. Para varios valores del mismo nombre y tipo, usa **Modificar** y edita la lista completa.
+2. Pulsa **Guardar** para un registro nuevo, o **Modificar** sobre un RRset existente. El formulario de alta comprueba que el registro no exista para evitar reemplazar sus valores accidentalmente. Para varios valores del mismo nombre y tipo, usa **Modificar** y edita la lista completa; la casilla **Deshabilitado** conserva o cambia el estado de cada valor. Si hay un cambio pendiente para ese registro, el editor muestra sus valores pendientes.
 3. Abre **Revisar cambios** en la cabecera para revisar el servidor, zona, nombre, tipo, TTL y contenido.
 4. Quita un cambio individual, usa **Descartar Todo**, o pulsa **Confirmar y Aplicar** para enviarlos a PowerDNS.
 
@@ -422,7 +426,7 @@ Hay un máximo de **10 cambios pendientes** y **20 valores por RRset**. Al aplic
 | Seguro (por defecto) | Consultar y preparar cambios de registros; el SOA queda bloqueado. |
 | Kamikaze | También crear y eliminar zonas, y modificar el SOA existente. |
 
-**Crear y borrar zonas se ejecuta inmediatamente**, fuera de la lista de cambios pendientes. Para borrar una zona debes escribir su nombre como confirmación. El SOA solo puede existir en la raíz de la zona y no se puede borrar desde la interfaz.
+**Crear y borrar zonas se ejecuta inmediatamente**, fuera de la lista de cambios pendientes. Para borrar una zona debes escribir su nombre como confirmación. El SOA solo puede existir en la raíz de la zona y no se puede borrar desde la interfaz. Para aplicar un SOA pendiente también debe permanecer activo Modo Kamikaze. El borrado exitoso de una zona descarta sus cambios pendientes del mismo servidor.
 
 Los usuarios de consulta pueden navegar y buscar, pero no modificar DNS.
 
@@ -471,3 +475,33 @@ La prioridad es **archivo INI → variable de entorno → valor por defecto**. U
 | No aparecen estilos o iconos | El navegador necesita acceder a `cdn.jsdelivr.net`, usado por las plantillas. |
 
 Los eventos se envían a syslog con el nombre `pdnsadmin`: revisa el destino de syslog de tu sistema para diagnosticar accesos y operaciones. `config.ini`, archivos `.pem`, claves `.key` y archivos ZIP están excluidos de Git; guarda los secretos y certificados fuera del repositorio.
+
+### Pestaña activa y destino de los cambios
+
+El panel permite una sola pestaña activa por origen y perfil del navegador. Las demás muestran un aviso y un botón **Reintentar**; cierra la pestaña activa antes de reintentar. El bloqueo se libera al salir o cerrar la pestaña, y se comprueba nuevamente al volver mediante el historial. Requiere JavaScript y Web Locks en un contexto seguro (HTTPS o localhost); si no están disponibles, el panel queda bloqueado. Navegadores, perfiles y orígenes diferentes tienen bloqueos independientes.
+
+Cada formulario de PowerDNS conserva el servidor mostrado al abrirlo. Los cambios pendientes guardan ese destino y se aplican exclusivamente a él, aunque cambie la selección de navegación. Se rechazan formularios sin servidor válido y pendientes antiguos sin destino explícito; estos últimos deben descartarse y volver a crearse.
+
+### Despliegues independientes del panel
+
+Los filtros y forwarders se aplican mediante un proceso temporal por trabajo. En systemd utiliza un scope separado; en SysV se ejecuta en una sesión separada. Una vez iniciado el ejecutor, reiniciar Gunicorn no interrumpe el trabajo. No requiere un servicio permanente adicional. El progreso y los resultados permanecen en disco, y los trabajos interrumpidos no se reintentan automáticamente. Consulta la [instalación del lanzador y los permisos sudo](docs/recursive-filters.md#ejecutor-temporal-de-despliegues) antes de actualizar una instalación existente.
+
+El historial de despliegues conserva como máximo **20 trabajos durante 15 días desde su creación**. La limpieza automática incluye resultados, copias de solicitudes, archivos generados y logs; protege el trabajo activo y se realiza durante la actividad del panel o del ejecutor. El último resultado también caduca.
+
+### Validaciones y pruebas locales
+
+Los nombres absolutos de registros deben pertenecer a su zona; las comparaciones de nombres no distinguen mayúsculas y minúsculas. Se permiten hasta 10 cambios pendientes, incluyendo reemplazar uno ya existente cuando se alcanza ese límite. CNAME y SOA admiten un único valor. Se comprueban los campos numéricos de MX y SRV; SRV normaliza su destino y se admite el MX nulo `0 .`. Los TTL admiten de 0 a 2147483647 segundos, según [RFC 2181, sección 8](https://www.rfc-editor.org/rfc/rfc2181.html#section-8).
+
+Con las dependencias de Python instaladas, ejecuta:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+El recorrido opcional `tests/test_ui.cjs` requiere Playwright disponible para Node y Chromium. Permite indicar `CHROMIUM_PATH` y `PDNSADMIN_TEST_PYTHON` si los ejecutables están en otras rutas:
+
+```sh
+PDNSADMIN_TEST_PYTHON=/ruta/al/venv/bin/python node tests/test_ui.cjs
+```
+
+El recorrido inicia una aplicación temporal en localhost con inicio de sesión, API PowerDNS y distribución simulados. Comprueba edición, estados deshabilitados, pendientes, commit, creación y borrado de zonas, filtros, fallos parciales, roles, móvil, bloqueo de pestañas y logout; guarda capturas y un log en un directorio temporal. No usa el INI real, servidores DNS ni el proveedor OIDC. La fixture vive exclusivamente en `tests/local_ui_fixture.py`, no forma parte del arranque de producción ni se instala.

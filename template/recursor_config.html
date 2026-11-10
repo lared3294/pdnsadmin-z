@@ -9,7 +9,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="card card-body mb-4 border-0 shadow-sm">
         <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" id="steven-enabled" name="steven_enabled" {% if filter_state.steven_enabled %}checked{% endif %} {% if session.role != 'admin' %}disabled{% endif %}>
+            <input class="form-check-input" type="checkbox" id="steven-enabled" name="steven_enabled" {% if filter_state.steven_enabled %}checked{% endif %} {% if session.role != 'admin' or (filter_job and filter_job.status == 'running') %}disabled{% endif %}>
             <label class="form-check-label fw-bold" for="steven-enabled">StevenBlacklist</label>
         </div>
         <div class="text-muted small mt-2">Incluir la lista de StevenBlack de malware, anuncios y contenido no deseado. Se descarga de nuevo al aplicar.</div>
@@ -18,13 +18,13 @@
         <div class="col-lg-6"><div class="card h-100 shadow-sm">
             <div class="card-header bg-white py-3"><i class="bi bi-shield-x text-danger" aria-hidden="true"></i> <strong>Lista negra</strong><div class="small text-muted mt-1">Dominios adicionales que quieres bloquear.</div></div>
             <div class="card-body"><label class="visually-hidden" for="blacklist">Lista negra en formato hosts</label>
-                <textarea class="form-control font-monospace" style="font-size:.85rem;" id="blacklist" name="blacklist" rows="12" maxlength="1048576" placeholder="# Redes sociales&#10;0.0.0.0 facebook.com&#10;0.0.0.0 instagram.com" {% if session.role != 'admin' %}readonly{% endif %}>{{ filter_state.blacklist }}</textarea>
+                <textarea class="form-control font-monospace" style="font-size:.85rem;" id="blacklist" name="blacklist" rows="12" maxlength="1048576" placeholder="# Redes sociales&#10;0.0.0.0 facebook.com&#10;0.0.0.0 instagram.com" {% if session.role != 'admin' or (filter_job and filter_job.status == 'running') %}readonly{% endif %}>{{ filter_state.blacklist }}</textarea>
             </div>
         </div></div>
         <div class="col-lg-6"><div class="card h-100 shadow-sm">
             <div class="card-header bg-white py-3"><i class="bi bi-shield-check text-success" aria-hidden="true"></i> <strong>Lista blanca</strong><div class="small text-muted mt-1">Excepciones: tienen prioridad sobre ambas fuentes de bloqueo.</div></div>
             <div class="card-body"><label class="visually-hidden" for="whitelist">Lista blanca en formato hosts</label>
-                <textarea class="form-control font-monospace" style="font-size:.85rem;" id="whitelist" name="whitelist" rows="12" maxlength="1048576" placeholder="0.0.0.0 azurefd.net&#10;0.0.0.0 googletagmanager.com" {% if session.role != 'admin' %}readonly{% endif %}>{{ filter_state.whitelist }}</textarea>
+                <textarea class="form-control font-monospace" style="font-size:.85rem;" id="whitelist" name="whitelist" rows="12" maxlength="1048576" placeholder="0.0.0.0 azurefd.net&#10;0.0.0.0 googletagmanager.com" {% if session.role != 'admin' or (filter_job and filter_job.status == 'running') %}readonly{% endif %}>{{ filter_state.whitelist }}</textarea>
             </div>
         </div></div>
     </div>
@@ -43,7 +43,7 @@
     <div class="card-header bg-white py-3"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i> <strong>Forwarders</strong><div class="small text-muted mt-1">Servidores a los que reenviar las consultas de cada zona.</div></div>
     <div class="card-body">
         <label class="visually-hidden" for="forwarders">Contenido de forward-zones</label>
-        <textarea class="form-control font-monospace mb-3" style="font-size:.85rem;" id="forwarders" name="forwarders" rows="8" maxlength="1048576" placeholder="# Zonas privadas&#10;example.org=192.0.2.10,192.0.2.11&#10;+example.net=192.0.2.20" {% if session.role != 'admin' %}readonly{% endif %}>{{ filter_state.forwarders|default('') }}</textarea>
+        <textarea class="form-control font-monospace mb-3" style="font-size:.85rem;" id="forwarders" name="forwarders" rows="8" maxlength="1048576" placeholder="# Zonas privadas&#10;example.org=192.0.2.10,192.0.2.11&#10;+example.net=192.0.2.20" {% if session.role != 'admin' or (filter_job and filter_job.status == 'running') %}readonly{% endif %}>{{ filter_state.forwarders|default('') }}</textarea>
         <p class="small text-muted mb-3">Una zona por línea: <code>zona=IP,IP:puerto</code>. El prefijo <code>+</code> solicita recursión al destino. Pega tu lista actual antes de aplicarla: se reemplaza el archivo completo.</p>
         {% if session.role == 'admin' %}
         <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
@@ -66,7 +66,7 @@
     <div class="card-body">
         <p id="filter-job-message" role="status" aria-live="polite">{{ filter_job.message }}</p>
         <div id="filter-job-stats" class="small text-muted mb-3">{% if filter_job.stats and filter_job.stats.zones is defined %}Zonas reenviadas: {{ filter_job.stats.zones }}{% elif filter_job.stats %}Dominios finales: {{ filter_job.stats.total }} · Excluidos por lista blanca: {{ filter_job.stats.excluded }}{% endif %}</div>
-        <div id="filter-job-results">{% for result in filter_job.results %}<div class="mb-2"><strong>{{ result.name }}</strong> · {{ {"ready": "Comprobado", "applying": "Aplicando…", "success": "Aplicado", "error": "Error"}.get(result.status, result.status) }}<div class="small text-muted">{{ result.detail }}</div></div>{% endfor %}</div>
+        <div id="filter-job-results">{% for result in filter_job.results %}<div class="mb-2"><strong>{{ result.name }}</strong> · {{ {"ready": "Comprobado", "applying": "Aplicando…", "success": "Aplicado", "error": "Error", "skipped": "No modificado"}.get(result.status, result.status) }}<div class="small text-muted">{{ result.detail }}</div></div>{% endfor %}</div>
     </div>
 </div>
 {% if session.role == 'admin' and filter_job.status == 'running' %}
@@ -74,15 +74,20 @@
 (function () {
     const statusUrl = {{ url_for('filters_status', job_id=filter_job.id)|tojson }};
     async function poll() {
+        if (!document.documentElement.hasAttribute('data-tab-active')) {
+            window.setTimeout(poll, 2000);
+            return;
+        }
         try {
             const response = await fetch(statusUrl, {headers: {'Accept': 'application/json'}});
+            if (response.redirected) { window.location.assign(response.url); return; }
             if (!response.ok) throw new Error('status');
             const job = await response.json();
             document.getElementById('filter-job-message').textContent = job.message;
             if (job.stats) document.getElementById('filter-job-stats').textContent = job.kind === 'forward-zones' ? `Zonas reenviadas: ${job.stats.zones}` : `Dominios finales: ${job.stats.total} · Excluidos por lista blanca: ${job.stats.excluded}`;
             const results = document.getElementById('filter-job-results');
             results.replaceChildren();
-            const labels = {ready: 'Comprobado', applying: 'Aplicando…', success: 'Aplicado', error: 'Error'};
+            const labels = {ready: 'Comprobado', applying: 'Aplicando…', success: 'Aplicado', error: 'Error', skipped: 'No modificado'};
             for (const result of job.results) {
                 const row = document.createElement('div'); row.className = 'mb-2';
                 const title = document.createElement('strong'); title.textContent = result.name;

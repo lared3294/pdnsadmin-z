@@ -1,0 +1,26 @@
+#!/bin/sh
+# Install root-owned. Only a job ID and an unprivileged state directory come from the web process.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+[ "$#" -eq 2 ] && [ "${#1}" -eq 32 ] || { echo 'Identificador inválido.' >&2; exit 1; }
+case "$1" in *[!a-f0-9]*) echo 'Identificador inválido.' >&2; exit 1 ;; esac
+
+# Match the account and source used by the web service. Interpreter and source
+# are fixed root-owned paths; the directory is opened only after dropping privileges.
+case "$2" in /*) ;; *) echo 'El directorio debe ser absoluto.' >&2; exit 1 ;; esac
+RUN_AS=pdnsadmin
+PYTHON=/opt/pdnsadmin-z/.venv/bin/python
+RUNNER=/opt/pdnsadmin-z/recursor_job.py
+
+if [ -d /run/systemd/system ]; then
+    # A scope separate from pdnsadmin.service survives its KillMode=mixed stop.
+    # The root launcher creates the scope; the actual executor runs unprivileged.
+    exec /usr/bin/env -i PATH="$PATH" /usr/bin/systemd-run --scope --quiet \
+        --unit="pdnsadmin-recursor-$1" \
+        /usr/sbin/runuser -u "$RUN_AS" -- "$PYTHON" -I "$RUNNER" "$2" "$1"
+else
+    # Popen has already detached this process from the web session and stdio.
+    exec /usr/bin/env -i PATH="$PATH" /usr/sbin/runuser -u "$RUN_AS" -- \
+        "$PYTHON" -I "$RUNNER" "$2" "$1"
+fi

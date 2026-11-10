@@ -112,10 +112,10 @@ detect_init'''
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             archive = root / 'project.tar.gz'
-            required = ['pdnsadmin-z.py', 'recursor_config.py', 'scripts/pdnsadmin-update-recursors', 'template/recursor_config.html', 'wsgi.py', 'gunicorn.conf.py', 'requirements.txt',
+            required = ['pdnsadmin-z.py', 'recursor_config.py', 'recursor_job.py', 'scripts/pdnsadmin-start-recursor-job', 'session_lock.py', 'scripts/pdnsadmin-update-recursors', 'template/recursor_config.html', 'wsgi.py', 'gunicorn.conf.py', 'requirements.txt',
                         'config.example.ini', 'README.md', 'install.sh', 'init/pdnsadmin',
                         'systemd/pdnsadmin.service', 'template/dashboard.html',
-                        'template/login.html', 'template/review.html']
+                        'template/login.html', 'template/review.html', 'template/single_tab.html']
             with tarfile.open(archive, 'w:gz') as tar:
                 for name in required:
                     tar.add(ROOT / name, arcname='pdnsadmin-z/' + name)

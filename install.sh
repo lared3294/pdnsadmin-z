@@ -58,7 +58,7 @@ parse_args() {
 source_complete() {
     [[ -n "$SOURCE_DIR" ]] || return 1
     local name
-    for name in pdnsadmin-z.py recursor_config.py wsgi.py gunicorn.conf.py requirements.txt config.example.ini README.md install.sh init/pdnsadmin systemd/pdnsadmin.service template/recursor_config.html scripts/pdnsadmin-update-recursors; do
+    for name in pdnsadmin-z.py recursor_config.py recursor_job.py session_lock.py wsgi.py gunicorn.conf.py requirements.txt config.example.ini README.md install.sh init/pdnsadmin systemd/pdnsadmin.service template/recursor_config.html template/single_tab.html scripts/pdnsadmin-update-recursors scripts/pdnsadmin-start-recursor-job; do
         [[ -f "$SOURCE_DIR/$name" ]] || return 1
     done
 }
@@ -124,6 +124,7 @@ check_dependencies() {
     python3 -c 'import venv, ensurepip' || fail 'Python requiere venv y ensurepip (en Debian/Ubuntu: python3-venv).'
     if [[ "$SELECTED_INIT" == systemd ]]; then
         command -v systemctl >/dev/null || fail 'Falta systemctl.'
+        command -v systemd-run >/dev/null || fail 'Falta systemd-run para los despliegues temporales.'
     else
         command -v start-stop-daemon >/dev/null || fail 'SysV requiere start-stop-daemon (paquete dpkg en Devuan/antiX).'
         { command -v update-rc.d >/dev/null || command -v chkconfig >/dev/null; } || fail 'SysV requiere update-rc.d o chkconfig.'
@@ -166,12 +167,12 @@ copy_application() {
     local name
     run install -d -o root -g root -m 0755 "$APP_DIR" "$APP_DIR/template" "$APP_DIR/init" "$APP_DIR/systemd" "$APP_DIR/scripts"
     # Explicit list: never copy config.ini, certificates, ZIPs, .git or local environments.
-    for name in pdnsadmin-z.py recursor_config.py wsgi.py gunicorn.conf.py requirements.txt config.example.ini README.md; do
+    for name in pdnsadmin-z.py recursor_config.py recursor_job.py session_lock.py wsgi.py gunicorn.conf.py requirements.txt config.example.ini README.md; do
         if [[ "$SOURCE_DIR/$name" != "$APP_DIR/$name" ]]; then
             run install -o root -g root -m 0644 "$SOURCE_DIR/$name" "$APP_DIR/$name"
         fi
     done
-    for name in dashboard.html recursor_config.html login.html review.html; do
+    for name in dashboard.html recursor_config.html login.html review.html single_tab.html; do
         if [[ "$SOURCE_DIR/template/$name" != "$APP_DIR/template/$name" ]]; then
             run install -o root -g root -m 0644 "$SOURCE_DIR/template/$name" "$APP_DIR/template/$name"
         fi
@@ -184,6 +185,12 @@ copy_application() {
     if [[ "$SOURCE_DIR" != "$APP_DIR" ]]; then
         run install -o root -g root -m 0755 "$SOURCE_DIR/scripts/pdnsadmin-update-recursors" "$APP_DIR/scripts/pdnsadmin-update-recursors"
     fi
+    if [[ "$SOURCE_DIR" != "$APP_DIR" ]]; then
+        run install -o root -g root -m 0755 "$SOURCE_DIR/scripts/pdnsadmin-start-recursor-job" "$APP_DIR/scripts/pdnsadmin-start-recursor-job"
+    fi
+    # Fixed root-owned launcher; sudo authorization remains an explicit admin step.
+    run install -d -o root -g root -m 0755 /usr/local/sbin
+    run install -o root -g root -m 0755 "$SOURCE_DIR/scripts/pdnsadmin-start-recursor-job" /usr/local/sbin/pdnsadmin-start-recursor-job
     run python3 -m venv "$APP_DIR/.venv"
     run "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
     run "$APP_DIR/.venv/bin/python" -m pip install -r "$APP_DIR/requirements.txt"

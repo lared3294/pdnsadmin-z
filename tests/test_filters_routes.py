@@ -73,7 +73,7 @@ class FilterRouteTests(unittest.TestCase):
 
     def test_forwarder_apply_selects_forward_zones(self):
         self.login()
-        self.module.cfg.read_string('[filters]\ntargets=recursor1,recursor2,recursor3,recursor4\n')
+        self.module.cfg.read_string('[recursor]\ntargets=recursor1,recursor2,recursor3,recursor4\n')
         for i in range(1, 5): self.module.cfg[f'recursor:recursor{i}'] = {'host': f'192.0.2.{i}'}
         with patch.object(self.module.filter_store, 'start', return_value='a'*32) as start:
             response = self.client.post('/filters', data=dict(csrf_token='test-token', action='apply_forwarders', forwarders='example.org=192.0.2.1'))
@@ -93,6 +93,31 @@ class FilterRouteTests(unittest.TestCase):
     def test_job_status_is_not_available_to_consultation_user(self):
         self.login('consulta')
         self.assertEqual(self.client.get('/filters/status/' + 'a' * 32).status_code, 302)
+
+    def test_invalid_submission_still_shows_running_job_and_locks_controls(self):
+        import time
+        self.login()
+        job_id = 'c' * 32
+        self.module.filter_store._write(self.module.filter_store.directory / 'jobs' / (job_id + '.json'),
+            dict(id=job_id,user='test-user',status='running',message='Trabajo en curso',created=time.time(),
+                 runner_started=False,startup_deadline=time.time()+30,results=[],stats=None))
+        self.module.filter_store._write(self.module.filter_store.directory / 'latest.json', {'id':job_id})
+        response = self.client.post('/filters',data=dict(csrf_token='test-token',action='save',blacklist='bad domain',whitelist='',forwarders=''))
+        self.assertEqual(response.status_code,200)
+        self.assertIn('Trabajo en curso',response.text)
+        self.assertIn('id="blacklist"',response.text)
+        self.assertIn('readonly',response.text)
+        self.assertIn('value="apply" disabled',response.text)
+
+    def test_large_list_within_one_mib_is_accepted_and_larger_list_is_not_saved(self):
+        self.login()
+        text = '#' + 'x' * 600000
+        response = self.client.post('/filters',data=dict(csrf_token='test-token',action='save',blacklist=text,whitelist='',forwarders=''))
+        self.assertEqual(response.status_code,302)
+        self.assertEqual(self.module.filter_store.read()['blacklist'],text)
+        response = self.client.post('/filters',data=dict(csrf_token='test-token',action='save',blacklist='#'+'x'*1048576,whitelist='',forwarders=''))
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(self.module.filter_store.read()['blacklist'],text)
 
 
 if __name__ == '__main__': unittest.main()
